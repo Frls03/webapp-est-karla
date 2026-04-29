@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -26,6 +26,20 @@ function resolveApiBaseUrl(rawValue) {
 }
 
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+
+function getFriendlyLoginError(error) {
+  const raw = String(error?.message || '').toLowerCase()
+  if (raw.includes('invalid_credentials') || raw.includes('invalid login credentials') || raw.includes('credenciales')) {
+    return 'Correo o contraseña incorrectos. Verifica tus datos e inténtalo de nuevo.'
+  }
+  if (raw.includes('email') && raw.includes('valid')) {
+    return 'Ingresa un correo válido para continuar.'
+  }
+  if (raw.includes('fetch') || raw.includes('network') || raw.includes('failed')) {
+    return 'No pudimos conectarnos. Revisa tu internet e inténtalo nuevamente.'
+  }
+  return 'No pudimos iniciar sesión en este momento. Inténtalo de nuevo en unos segundos.'
+}
 const MONTHS = [
   'enero',
   'febrero',
@@ -64,7 +78,7 @@ const CHART_COLORS = {
 
 const AREA_CONFIG = {
   superior: {
-    label: 'Educacion Superior',
+    label: 'Educación Superior',
     sellers: [],
     criteria: ['leads', 'alianzas', 'contactabilidad', 'cumplimiento', 'metas', 'resumen'],
   },
@@ -99,32 +113,32 @@ const CRITERIA_LABELS = {
   clientesNuevos: 'Clientes nuevos',
   propuestas: 'Propuestas',
   citas: 'Citas',
-  facturacion: 'Facturacion',
+  facturacion: 'Facturación',
 }
 
 
 const EXEC_STATUS = [
-  'No participara',
-  'Presentacion',
+  'No participará',
+  'Presentación',
   'Seguimiento con cita',
   'Seguimiento sin cita',
   'Venta',
 ]
-const SUPERIOR_LEAD_STATUS = ['No participara', 'Presentacion', 'Seguimiento', 'Venta', 'Cancelada']
+const SUPERIOR_LEAD_STATUS = ['No participará', 'Presentación', 'Seguimiento', 'Venta', 'Cancelada']
 const SUPERIOR_ALIANZA_STATUS = ['Cita', 'En proceso', 'Renovada', 'Escritorio informativo']
 const INC_PROPOSAL_STATUS = [
   'Solicitud de propuesta',
-  'Envio de propuesta',
-  'Negociacion',
+  'Envío de propuesta',
+  'Negociación',
   'Pre-cierre',
   'Cierre',
   'Declinado',
 ]
 const INC_MOTIVOS = [
-  'Presentacion de portafolio',
-  'Presentacion de propuesta',
-  'Alineacion de contenido',
-  'Alineacion de ejecucion',
+  'Presentación de portafolio',
+  'Presentación de propuesta',
+  'Alineación de contenido',
+  'Alineación de ejecución',
   'Seguimiento',
   'Apertura de curso',
   'Cierre de curso',
@@ -645,6 +659,7 @@ function App() {
   })
   const [loginInput, setLoginInput] = useState({ email: '', password: '' })
   const [loginError, setLoginError] = useState('')
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [datasetHydrated, setDatasetHydrated] = useState(false)
   const [view, setView] = useState('dashboard')
   const [activeArea, setActiveArea] = useState('superior')
@@ -664,6 +679,7 @@ function App() {
   const [forms, setForms] = useState(INITIAL_FORMS)
   const [flashMessage, setFlashMessage] = useState('')
   const toastTimerRef = useRef(null)
+  const [confirmDialog, setConfirmDialog] = useState(null)
   const [recordViewer, setRecordViewer] = useState(null)
   const [recordDraft, setRecordDraft] = useState(null)
   const [goalSellerByArea, setGoalSellerByArea] = useState({
@@ -764,36 +780,64 @@ function App() {
     }
   }, [auth?.accessToken])
 
-  function handleLoginSubmit(event) {
+  function askConfirmation(message, onAccept) {
+    if (typeof onAccept === 'function') {
+      setConfirmDialog({ message, onAccept })
+      return
+    }
+    return new Promise((resolve) => {
+      setConfirmDialog({
+        message,
+        onAccept: () => resolve(true),
+        onCancel: () => resolve(false),
+      })
+    })
+  }
+
+  function closeConfirmation(accepted) {
+    if (!confirmDialog) return
+    if (accepted && typeof confirmDialog.onAccept === 'function') {
+      confirmDialog.onAccept()
+    }
+    if (!accepted && typeof confirmDialog.onCancel === 'function') {
+      confirmDialog.onCancel()
+    }
+    setConfirmDialog(null)
+  }
+
+  async function handleLoginSubmit(event) {
     event.preventDefault()
+    if (isLoggingIn) return
     const email = sanitizeText(loginInput.email, 120)
     const password = loginInput.password
+    setLoginError('')
+    setIsLoggingIn(true)
 
-    apiRequest('/api/auth/login', { method: 'POST', body: { email, password } })
-      .then(async (loginData) => {
-        const token = loginData?.session?.access_token
-        if (!token) throw new Error('Sesion invalida')
-        const me = await apiRequest('/api/auth/me', { token })
-        const profile = me?.profile
-        const session = {
-          email: me?.user?.email || email,
-          role: profile?.role || 'advisor',
-          name: profile?.display_name || me?.user?.email || 'Usuario',
-          area: profile?.area || null,
-          seller: profile?.seller_name || null,
-          accessToken: token,
-        }
-        setAuth(session)
-        sessionStorage.setItem(AUTH_KEY, JSON.stringify(session))
-        setLoginError('')
-        if (session.role === 'advisor' && session.area) {
-          setActiveArea(session.area)
-          setSelectedSellerByArea((prev) => ({ ...prev, [session.area]: session.seller }))
-        }
-      })
-      .catch((err) => {
-        setLoginError(err.message || 'Credenciales invalidas')
-      })
+    try {
+      const loginData = await apiRequest('/api/auth/login', { method: 'POST', body: { email, password } })
+      const token = loginData?.session?.access_token
+      if (!token) throw new Error('invalid_credentials')
+      const me = await apiRequest('/api/auth/me', { token })
+      const profile = me?.profile
+      const session = {
+        email: me?.user?.email || email,
+        role: profile?.role || 'advisor',
+        name: profile?.display_name || me?.user?.email || 'Usuario',
+        area: profile?.area || null,
+        seller: profile?.seller_name || null,
+        accessToken: token,
+      }
+      setAuth(session)
+      sessionStorage.setItem(AUTH_KEY, JSON.stringify(session))
+      if (session.role === 'advisor' && session.area) {
+        setActiveArea(session.area)
+        setSelectedSellerByArea((prev) => ({ ...prev, [session.area]: session.seller }))
+      }
+    } catch (err) {
+      setLoginError(getFriendlyLoginError(err))
+    } finally {
+      setIsLoggingIn(false)
+    }
   }
 
   function handleLogout() {
@@ -822,7 +866,7 @@ function App() {
     if (!isMaster) {
       const restricted = getRestrictedAdvisorCriteria(area)
       if (restricted.has(value)) {
-        setFlashMessage('Este criterio no esta disponible para asesores')
+        setFlashMessage('Este criterio no estÃ¡ disponible para asesores')
         return
       }
     }
@@ -1035,25 +1079,22 @@ function App() {
       setFlashMessage('Solo gerencia puede eliminar registros')
       return
     }
-    const confirmed = window.confirm('¿Seguro que deseas eliminar este registro? Esta accion no se puede deshacer.')
-    if (!confirmed) {
-      setFlashMessage('Eliminacion cancelada')
-      return
-    }
-    setDataset((prev) => ({
-      ...prev,
-      [area]: {
-        ...prev[area],
-        [criterion]: prev[area][criterion].filter((row) => row.id !== id),
-      },
-    }))
-    if (auth?.accessToken) {
-      apiRequest(`/api/data/record/${id}`, { method: 'DELETE', token: auth.accessToken }).catch((err) => {
-        console.error(err)
-        setFlashMessage(`No se pudo eliminar en servidor: ${err.message}`)
-      })
-    }
-    setFlashMessage('Registro eliminado')
+    askConfirmation('¿Seguro de eliminar este dato?', () => {
+      setDataset((prev) => ({
+        ...prev,
+        [area]: {
+          ...prev[area],
+          [criterion]: prev[area][criterion].filter((row) => row.id !== id),
+        },
+      }))
+      if (auth?.accessToken) {
+        apiRequest(`/api/data/record/${id}`, { method: 'DELETE', token: auth.accessToken }).catch((err) => {
+          console.error(err)
+          setFlashMessage(`No se pudo eliminar en servidor: ${err.message}`)
+        })
+      }
+      setFlashMessage('Registro eliminado')
+    })
   }
 
   function canEditRecord(area, criterion, row) {
@@ -1115,12 +1156,6 @@ function App() {
       setFlashMessage('No hay cambios para guardar')
       return
     }
-    const confirmed = window.confirm('¿Deseas guardar los cambios de este registro?')
-    if (!confirmed) {
-      setFlashMessage('Edicion cancelada')
-      return
-    }
-
     const historyEntry = {
       id: crypto.randomUUID(),
       at: new Date().toISOString(),
@@ -1128,37 +1163,38 @@ function App() {
       action: 'UPDATED',
       changes,
     }
+    askConfirmation('¿Seguro de cambiar estos datos?', () => {
+      setDataset((prev) => ({
+        ...prev,
+        [area]: {
+          ...prev[area],
+          [criterion]: prev[area][criterion].map((row) =>
+            row.id === id
+              ? {
+                  ...row,
+                  ...normalized,
+                  updatedAt: historyEntry.at,
+                  changeHistory: [...(row.changeHistory || []), historyEntry],
+                }
+              : row,
+          ),
+        },
+      }))
 
-    setDataset((prev) => ({
-      ...prev,
-      [area]: {
-        ...prev[area],
-        [criterion]: prev[area][criterion].map((row) =>
-          row.id === id
-            ? {
-                ...row,
-                ...normalized,
-                updatedAt: historyEntry.at,
-                changeHistory: [...(row.changeHistory || []), historyEntry],
-              }
-            : row,
-        ),
-      },
-    }))
+      if (auth?.accessToken) {
+        apiRequest(`/api/data/record/${id}`, {
+          method: 'PATCH',
+          token: auth.accessToken,
+          body: { area, criterion, record: normalized },
+        }).catch((err) => {
+          console.error(err)
+          setFlashMessage('No se pudo guardar la edicion en servidor')
+        })
+      }
 
-    if (auth?.accessToken) {
-      apiRequest(`/api/data/record/${id}`, {
-        method: 'PATCH',
-        token: auth.accessToken,
-        body: { area, criterion, record: normalized },
-      }).catch((err) => {
-        console.error(err)
-        setFlashMessage('No se pudo guardar la edicion en servidor')
-      })
-    }
-
-    setFlashMessage('Registro actualizado')
-    closeRecordViewer()
+      setFlashMessage('Registro actualizado')
+      closeRecordViewer()
+    })
   }
 
   function isManagerialCriterion(area, criterion) {
@@ -1174,7 +1210,7 @@ function App() {
     return false
   }
 
-  function submitCurrentCriterion(event) {
+  async function submitCurrentCriterion(event) {
     event.preventDefault()
 
     if (!canAccessArea(activeArea)) {
@@ -1184,7 +1220,7 @@ function App() {
     if (!isMaster) {
       const restricted = getRestrictedAdvisorCriteria(activeArea)
       if (restricted.has(activeCriterion)) {
-        setFlashMessage('Este criterio no esta disponible para asesores')
+        setFlashMessage('Este criterio no estÃ¡ disponible para asesores')
         return
       }
     }
@@ -1202,11 +1238,8 @@ function App() {
       setFlashMessage('Mes y asesor son obligatorios')
       return
     }
-    const saveConfirmed = window.confirm('¿Deseas guardar este registro?')
-    if (!saveConfirmed) {
-      setFlashMessage('Guardado cancelado')
-      return
-    }
+    const saveConfirmed = await askConfirmation('¿Seguro de cambiar estos datos?')
+    if (!saveConfirmed) return
     const requireText = (value, label) => {
       if (!sanitizeText(value, 120)) {
         setFlashMessage(`${label} es obligatorio`)
@@ -1478,7 +1511,7 @@ function App() {
       return
     }
     if (!auth?.accessToken) {
-      setFlashMessage('Sesion expirada. Inicia sesion nuevamente')
+      setFlashMessage('Sesión expirada. Inicia sesión nuevamente')
       return
     }
     const payload = {
@@ -1546,9 +1579,9 @@ function App() {
       })
   }
 
-  function deactivateProgram(programId) {
+  async function deactivateProgram(programId) {
     if (!isMaster || !auth?.accessToken) return
-    if (!window.confirm('Desactivar este programa?')) return
+    if (!(await askConfirmation('¿Seguro de eliminar este dato?'))) return
     apiRequest(`/api/data/program/${programId}`, { method: 'DELETE', token: auth.accessToken })
       .then(() => {
         setDataset((prev) => ({
@@ -1909,7 +1942,7 @@ function App() {
           ...(isMaster
             ? [{
                 key: 'ventas-facturado-backlog',
-                title: 'Venta vs Facturado vs Backlog de facturacion',
+                title: 'Venta vs Facturado vs Backlog de facturación',
                 type: 'bar',
                 data: ventasFacturadoBacklog,
                 x: 'name',
@@ -2024,7 +2057,7 @@ function App() {
       <main className="login-screen">
         <section className="login-card">
           <h1>Dashboard Comercial</h1>
-          <p>Acceso por asesor y gerencia</p>
+          <p>Acceso para ventas y gerencia</p>
           <form className="login-form" onSubmit={handleLoginSubmit}>
             <label htmlFor="email">Correo</label>
             <input
@@ -2032,22 +2065,33 @@ function App() {
               value={loginInput.email}
               onChange={(event) => setLoginInput((prev) => ({ ...prev, email: event.target.value }))}
               autoComplete="email"
+              disabled={isLoggingIn}
               required
             />
-            <label htmlFor="password">Contrasena</label>
+            <label htmlFor="password">Contraseña</label>
             <input
               id="password"
               type="password"
               value={loginInput.password}
               onChange={(event) => setLoginInput((prev) => ({ ...prev, password: event.target.value }))}
               autoComplete="current-password"
+              disabled={isLoggingIn}
               required
             />
-            <button type="submit" className="primary-btn">Ingresar</button>
+            <button type="submit" className="primary-btn login-submit-btn" disabled={isLoggingIn}>
+              {isLoggingIn ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Iniciando...
+                </>
+              ) : (
+                'Ingresar'
+              )}
+            </button>
             {loginError ? <p className="error-message">{loginError}</p> : null}
           </form>
           <small>
-            Acceso por correo y contrasena con Supabase Auth
+            Accede con tu correo y contraseña asignados. Si tienes problemas para ingresar u olvidaste tu contraseña, contacta a tu administrador.
           </small>
         </section>
       </main>
@@ -2442,10 +2486,10 @@ function App() {
           {view === 'ingreso' ? (
             <>
               <article className="panel-card full">
-                <h2>Configuracion de criterio</h2>
+                <h2>Configuración de criterio</h2>
                 <div className="csv-actions">
                   <label>
-                    Area activa
+                    Área activa
                     <strong>{AREA_CONFIG[activeArea].label}</strong>
                   </label>
                   <label>
@@ -2615,7 +2659,7 @@ function App() {
                 <div className="record-meta">
                   <span>ID: {selectedRecord.id}</span>
                   <span>Asesor: {selectedRecord.seller}</span>
-                  <span>Ultima actualizacion: {selectedRecord.updatedAt || 'N/A'}</span>
+                  <span>Última actualización: {selectedRecord.updatedAt || 'N/A'}</span>
                 </div>
 
                 <div className="record-edit-grid">
@@ -2675,7 +2719,7 @@ function App() {
                   </button>
                 </div>
 
-                <h4>Historico de cambios</h4>
+                <h4>Histórico de cambios</h4>
                 <div className="history-list">
                   {(selectedRecord.changeHistory || []).length === 0 ? (
                     <p>Sin cambios registrados.</p>
@@ -2700,6 +2744,22 @@ function App() {
             ) : (
               <p>El registro ya no existe o fue eliminado.</p>
             )}
+          </article>
+        </div>
+      ) : null}
+      {confirmDialog ? (
+        <div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="Confirmar acción">
+          <article className="confirm-bubble">
+            <div className="confirm-icon" aria-hidden="true">?</div>
+            <p>{confirmDialog.message}</p>
+            <div className="confirm-actions">
+              <button type="button" className="ghost-btn" onClick={() => closeConfirmation(false)}>
+                Cancelar
+              </button>
+              <button type="button" className="primary-btn" onClick={() => closeConfirmation(true)}>
+                Aceptar
+              </button>
+            </div>
           </article>
         </div>
       ) : null}
@@ -3070,3 +3130,5 @@ function getColumns(area, criterion) {
   ]
 }
 export default App
+
+
