@@ -1,5 +1,4 @@
-import { supabaseAuthClient } from '../lib/supabase.js'
-import { readWithFailover } from '../lib/db.js'
+import { supabaseAuthClient, supabaseAdminClient } from '../lib/supabase.js'
 
 function parseBearer(req) {
   const auth = req.headers.authorization || ''
@@ -16,14 +15,12 @@ export async function authRequired(req, res, next) {
     if (error || !data?.user) return res.status(401).json({ error: 'invalid_token' })
 
     const user = data.user
-    const profileResult = await readWithFailover(
-      `select user_id, role, is_active, display_name, area, seller_name
-       from public.admin_profiles
-       where user_id = $1
-       limit 1`,
-      [user.id],
-    )
-    const profile = profileResult.rows[0]
+    const { data: profile, error: profileError } = await supabaseAdminClient
+      .from('admin_profiles')
+      .select('user_id, role, is_active, display_name, area, seller_name')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (profileError) throw profileError
     if (!profile || !profile.is_active) {
       return res.status(403).json({ error: 'inactive_or_missing_profile' })
     }

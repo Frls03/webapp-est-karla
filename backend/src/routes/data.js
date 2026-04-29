@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { readWithFailover, writePrimaryThenBackup } from '../lib/db.js'
+import { supabaseAdminClient } from '../lib/supabase.js'
 
 export const dataRouter = Router()
 
@@ -61,102 +61,79 @@ const MONTH_TO_NUM = {
   diciembre: 12,
 }
 
+function throwIfError(error) {
+  if (error) throw error
+}
+
 function monthNum(monthText) {
   const key = String(monthText || '').toLowerCase()
   return MONTH_TO_NUM[key] || 1
 }
 
-function buildBusinessInsert(area, criterion, record, userId) {
+function buildBusinessMutation(area, criterion, record, userId) {
   const month = monthNum(record.month)
   const year = Number(record.year || new Date().getFullYear())
   const seller = record.seller || ''
 
+  const base = { month, year, seller_name: seller, created_by: userId, updated_by: userId }
+
   const map = {
-    'superior:leads': {
-      q: `insert into public.superior_leads(month, year, seller_name, nombre, carrera, estado, venta_q, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      p: [month, year, seller, record.nombre || '', record.carrera || '', record.estado || '', Number(record.ventaQ || 0), userId, userId],
-    },
-    'superior:alianzas': {
-      q: `insert into public.superior_alianzas(month, year, seller_name, empresa, estatus, fecha_escritorio, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      p: [month, year, seller, record.empresa || '', record.estatus || '', record.fechaEscritorio || null, userId, userId],
-    },
-    'superior:contactabilidad': {
-      q: `insert into public.superior_contactabilidad(month, year, seller_name, contactados, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6)`,
-      p: [month, year, seller, Number(record.contactados || 0), userId, userId],
-    },
+    'superior:leads': { table: 'superior_leads', row: { ...base, nombre: record.nombre || '', carrera: record.carrera || '', estado: record.estado || '', venta_q: Number(record.ventaQ || 0) } },
+    'superior:alianzas': { table: 'superior_alianzas', row: { ...base, empresa: record.empresa || '', estatus: record.estatus || '', fecha_escritorio: record.fechaEscritorio || null } },
+    'superior:contactabilidad': { table: 'superior_contactabilidad', row: { ...base, contactados: Number(record.contactados || 0) } },
     'superior:resumen': {
-      q: `insert into public.superior_resumen(month, year, seller_name, propuestas, alianzas_trabajadas, citas, contactabilidad, venta_q, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      p: [
-        month,
-        year,
-        seller,
-        Number(record.propuestas || 0),
-        Number(record.alianzasTrabajadas || 0),
-        Number(record.citas || 0),
-        Number(record.contactabilidad || 0),
-        Number(record.venta || 0),
-        userId,
-        userId,
-      ],
+      table: 'superior_resumen',
+      row: {
+        ...base,
+        propuestas: Number(record.propuestas || 0),
+        alianzas_trabajadas: Number(record.alianzasTrabajadas || 0),
+        citas: Number(record.citas || 0),
+        contactabilidad: Number(record.contactabilidad || 0),
+        venta_q: Number(record.venta || 0),
+      },
     },
     'superior:metas': {
-      q: `insert into public.superior_metas_programa(month, year, seller_name, bado, bmi, bas, mlt, mgp, mia, mba, total, is_cumplimiento, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,false,$12,$13)
-          on conflict (year, month, seller_name, is_cumplimiento) do update
-          set bado=excluded.bado,bmi=excluded.bmi,bas=excluded.bas,mlt=excluded.mlt,mgp=excluded.mgp,mia=excluded.mia,mba=excluded.mba,total=excluded.total,updated_by=excluded.updated_by`,
-      p: [month, year, seller, Number(record.bado || 0), Number(record.bmi || 0), Number(record.bas || 0), Number(record.mlt || 0), Number(record.mgp || 0), Number(record.mia || 0), Number(record.mba || 0), Number(record.total || 0), userId, userId],
+      table: 'superior_metas_programa',
+      row: {
+        ...base,
+        bado: Number(record.bado || 0),
+        bmi: Number(record.bmi || 0),
+        bas: Number(record.bas || 0),
+        mlt: Number(record.mlt || 0),
+        mgp: Number(record.mgp || 0),
+        mia: Number(record.mia || 0),
+        mba: Number(record.mba || 0),
+        total: Number(record.total || 0),
+        is_cumplimiento: false,
+      },
+      upsert: true,
+      onConflict: 'year,month,seller_name,is_cumplimiento',
     },
     'superior:cumplimiento': {
-      q: `insert into public.superior_metas_programa(month, year, seller_name, bado, bmi, bas, mlt, mgp, mia, mba, total, is_cumplimiento, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$13)
-          on conflict (year, month, seller_name, is_cumplimiento) do update
-          set bado=excluded.bado,bmi=excluded.bmi,bas=excluded.bas,mlt=excluded.mlt,mgp=excluded.mgp,mia=excluded.mia,mba=excluded.mba,total=excluded.total,updated_by=excluded.updated_by`,
-      p: [month, year, seller, Number(record.bado || 0), Number(record.bmi || 0), Number(record.bas || 0), Number(record.mlt || 0), Number(record.mgp || 0), Number(record.mia || 0), Number(record.mba || 0), Number(record.total || 0), userId, userId],
+      table: 'superior_metas_programa',
+      row: {
+        ...base,
+        bado: Number(record.bado || 0),
+        bmi: Number(record.bmi || 0),
+        bas: Number(record.bas || 0),
+        mlt: Number(record.mlt || 0),
+        mgp: Number(record.mgp || 0),
+        mia: Number(record.mia || 0),
+        mba: Number(record.mba || 0),
+        total: Number(record.total || 0),
+        is_cumplimiento: true,
+      },
+      upsert: true,
+      onConflict: 'year,month,seller_name,is_cumplimiento',
     },
-    'ejecutivo:leads': {
-      q: `insert into public.ejecutivo_leads(month, year, seller_name, empresa, cliente, program_id, program_name, estatus, venta_q, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      p: [month, year, seller, record.empresa || '', record.cliente || '', record.programId || null, record.programName || '', record.estatus || '', Number(record.ventaQ || 0), userId, userId],
-    },
-    'ejecutivo:llamadas': {
-      q: `insert into public.ejecutivo_llamadas(month, year, seller_name, total_llamadas, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6)`,
-      p: [month, year, seller, Number(record.totalLlamadas || 0), userId, userId],
-    },
-    'ejecutivo:datosActualizados': {
-      q: `insert into public.ejecutivo_datos_actualizados(month, year, seller_name, empresa, nombre, cargo, telefono, correo, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      p: [month, year, seller, record.empresa || '', record.nombre || '', record.cargo || '', record.telefono || '', record.correo || '', userId, userId],
-    },
-    'ejecutivo:clientesNuevos': {
-      q: `insert into public.ejecutivo_clientes_nuevos(month, year, seller_name, empresa, nombre, cargo, telefono, correo, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      p: [month, year, seller, record.empresa || '', record.nombre || '', record.cargo || '', record.telefono || '', record.correo || '', userId, userId],
-    },
-    'ejecutivo:facturacion': {
-      q: `insert into public.ejecutivo_facturacion(month, year, seller_name, fecha, empresa, tipo_curso, nombre_curso, importe, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      p: [month, year, seller, record.fecha || null, record.empresa || '', record.tipoCurso || '', record.nombreCurso || '', Number(record.importe || 0), userId, userId],
-    },
-    'incompany:propuestas': {
-      q: `insert into public.incompany_propuestas(month, year, seller_name, fecha, empresa, tipologia_curso, nombre_curso, inversion, estatus, total_final_q, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      p: [month, year, seller, record.fecha || null, record.empresa || '', record.tipologiaCurso || '', record.nombreCurso || '', Number(record.inversion || 0), record.estatus || '', Number(record.totalFinalQ || 0), userId, userId],
-    },
-    'incompany:citas': {
-      q: `insert into public.incompany_citas(month, year, seller_name, fecha, empresa, contacto, motivo, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      p: [month, year, seller, record.fecha || null, record.empresa || '', record.contacto || '', record.motivo || '', userId, userId],
-    },
-    'incompany:facturacion': {
-      q: `insert into public.incompany_facturacion(month, year, seller_name, fecha, empresa, tipo_curso, nombre_curso, importe, created_by, updated_by)
-          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      p: [month, year, seller, record.fecha || null, record.empresa || '', record.tipoCurso || '', record.nombreCurso || '', Number(record.importe || 0), userId, userId],
-    },
+    'ejecutivo:leads': { table: 'ejecutivo_leads', row: { ...base, empresa: record.empresa || '', cliente: record.cliente || '', program_id: record.programId || null, program_name: record.programName || '', estatus: record.estatus || '', venta_q: Number(record.ventaQ || 0) } },
+    'ejecutivo:llamadas': { table: 'ejecutivo_llamadas', row: { ...base, total_llamadas: Number(record.totalLlamadas || 0) } },
+    'ejecutivo:datosActualizados': { table: 'ejecutivo_datos_actualizados', row: { ...base, empresa: record.empresa || '', nombre: record.nombre || '', cargo: record.cargo || '', telefono: record.telefono || '', correo: record.correo || '' } },
+    'ejecutivo:clientesNuevos': { table: 'ejecutivo_clientes_nuevos', row: { ...base, empresa: record.empresa || '', nombre: record.nombre || '', cargo: record.cargo || '', telefono: record.telefono || '', correo: record.correo || '' } },
+    'ejecutivo:facturacion': { table: 'ejecutivo_facturacion', row: { ...base, fecha: record.fecha || null, empresa: record.empresa || '', tipo_curso: record.tipoCurso || '', nombre_curso: record.nombreCurso || '', importe: Number(record.importe || 0) } },
+    'incompany:propuestas': { table: 'incompany_propuestas', row: { ...base, fecha: record.fecha || null, empresa: record.empresa || '', tipologia_curso: record.tipologiaCurso || '', nombre_curso: record.nombreCurso || '', inversion: Number(record.inversion || 0), estatus: record.estatus || '', total_final_q: Number(record.totalFinalQ || 0) } },
+    'incompany:citas': { table: 'incompany_citas', row: { ...base, fecha: record.fecha || null, empresa: record.empresa || '', contacto: record.contacto || '', motivo: record.motivo || '' } },
+    'incompany:facturacion': { table: 'incompany_facturacion', row: { ...base, fecha: record.fecha || null, empresa: record.empresa || '', tipo_curso: record.tipoCurso || '', nombre_curso: record.nombreCurso || '', importe: Number(record.importe || 0) } },
   }
 
   return map[`${area}:${criterion}`] || null
@@ -172,18 +149,8 @@ function emptySnapshot() {
 
 function buildGoalsSnapshot(goalRows, sellersByArea) {
   const monthlyZeros = {
-    enero: 0,
-    febrero: 0,
-    marzo: 0,
-    abril: 0,
-    mayo: 0,
-    junio: 0,
-    julio: 0,
-    agosto: 0,
-    septiembre: 0,
-    octubre: 0,
-    noviembre: 0,
-    diciembre: 0,
+    enero: 0, febrero: 0, marzo: 0, abril: 0, mayo: 0, junio: 0,
+    julio: 0, agosto: 0, septiembre: 0, octubre: 0, noviembre: 0, diciembre: 0,
   }
   const goals = {
     superior: { bySeller: {} },
@@ -191,9 +158,7 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
     incompany: { citasMonthly: 0, salesAnnualBySeller: {}, salesMonthlyBySeller: {} },
   }
 
-  for (const seller of sellersByArea.superior || []) {
-    goals.superior.bySeller[seller] = { ventasMonthly: 0, contactabilidadMonthly: 0, alianzasMonthly: 0, citasMonthly: 0 }
-  }
+  for (const seller of sellersByArea.superior || []) goals.superior.bySeller[seller] = { ventasMonthly: 0, contactabilidadMonthly: 0, alianzasMonthly: 0, citasMonthly: 0 }
   for (const seller of sellersByArea.ejecutivo || []) {
     goals.ejecutivo.bySeller[seller] = { llamadasMonthly: 0, datosActualizadosMonthly: 0, clientesNuevosMonthly: 0 }
     goals.ejecutivo.salesMonthlyBySeller[seller] = { ...monthlyZeros }
@@ -203,11 +168,7 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
     goals.incompany.salesMonthlyBySeller[seller] = { ...monthlyZeros }
   }
 
-  const numToMonth = Object.entries(MONTH_TO_NUM).reduce((acc, [k, v]) => {
-    acc[v] = k
-    return acc
-  }, {})
-
+  const numToMonth = Object.entries(MONTH_TO_NUM).reduce((acc, [k, v]) => ({ ...acc, [v]: k }), {})
   for (const row of goalRows) {
     const area = row.area
     const seller = row.seller_name
@@ -215,70 +176,36 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
     const value = Number(row.value || 0)
     const monthName = row.month ? numToMonth[row.month] : null
 
-    if (area === 'superior' && seller && goals.superior.bySeller[seller] && criterion in goals.superior.bySeller[seller]) {
-      goals.superior.bySeller[seller][criterion] = value
-    }
-    if (area === 'ejecutivo' && seller && goals.ejecutivo.bySeller[seller] && criterion in goals.ejecutivo.bySeller[seller]) {
-      goals.ejecutivo.bySeller[seller][criterion] = value
-    }
-    if (area === 'ejecutivo' && criterion === 'salesMonthly' && seller && monthName && goals.ejecutivo.salesMonthlyBySeller[seller]) {
-      goals.ejecutivo.salesMonthlyBySeller[seller][monthName] = value
-    }
-    if (area === 'incompany' && criterion === 'citasMonthly') {
-      goals.incompany.citasMonthly = value
-    }
-    if (area === 'incompany' && criterion === 'salesAnnual' && seller && seller in goals.incompany.salesAnnualBySeller) {
-      goals.incompany.salesAnnualBySeller[seller] = value
-    }
-    if (area === 'incompany' && criterion === 'salesMonthly' && seller && monthName && goals.incompany.salesMonthlyBySeller[seller]) {
-      goals.incompany.salesMonthlyBySeller[seller][monthName] = value
-    }
+    if (area === 'superior' && seller && goals.superior.bySeller[seller] && criterion in goals.superior.bySeller[seller]) goals.superior.bySeller[seller][criterion] = value
+    if (area === 'ejecutivo' && seller && goals.ejecutivo.bySeller[seller] && criterion in goals.ejecutivo.bySeller[seller]) goals.ejecutivo.bySeller[seller][criterion] = value
+    if (area === 'ejecutivo' && criterion === 'salesMonthly' && seller && monthName && goals.ejecutivo.salesMonthlyBySeller[seller]) goals.ejecutivo.salesMonthlyBySeller[seller][monthName] = value
+    if (area === 'incompany' && criterion === 'citasMonthly') goals.incompany.citasMonthly = value
+    if (area === 'incompany' && criterion === 'salesAnnual' && seller && seller in goals.incompany.salesAnnualBySeller) goals.incompany.salesAnnualBySeller[seller] = value
+    if (area === 'incompany' && criterion === 'salesMonthly' && seller && monthName && goals.incompany.salesMonthlyBySeller[seller]) goals.incompany.salesMonthlyBySeller[seller][monthName] = value
   }
   return goals
 }
 
 dataRouter.get('/bootstrap', async (req, res, next) => {
   try {
-    const sellersResult = await readWithFailover(
-      `select area, name from public.sellers where is_active = true order by area, name`,
-      [],
-    )
-    const recordsResult = await readWithFailover(
-      `select id, area, criterion, payload, created_at, updated_at from public.app_records order by created_at asc`,
-      [],
-    )
-    const programsResult = await readWithFailover(
-      `select id, name, cycle, goal_q from public.executive_programs where is_active = true order by created_at asc`,
-      [],
-    )
-    const goalsResult = await readWithFailover(
-      `select area, seller_name, criterion, month, value from public.area_goals`,
-      [],
-    )
+    const [sellersR, recordsR, programsR, goalsR] = await Promise.all([
+      supabaseAdminClient.from('sellers').select('area, name').eq('is_active', true).order('area').order('name'),
+      supabaseAdminClient.from('app_records').select('id, area, criterion, payload, created_at, updated_at').order('created_at', { ascending: true }),
+      supabaseAdminClient.from('executive_programs').select('id, name, cycle, goal_q').eq('is_active', true).order('created_at', { ascending: true }),
+      supabaseAdminClient.from('area_goals').select('area, seller_name, criterion, month, value'),
+    ])
+    throwIfError(sellersR.error); throwIfError(recordsR.error); throwIfError(programsR.error); throwIfError(goalsR.error)
 
     const sellersByArea = { superior: [], ejecutivo: [], incompany: [] }
-    for (const row of sellersResult.rows) {
-      if (sellersByArea[row.area]) sellersByArea[row.area].push(row.name)
-    }
+    for (const row of sellersR.data || []) if (sellersByArea[row.area]) sellersByArea[row.area].push(row.name)
 
     const snapshot = emptySnapshot()
-    snapshot.ejecutivo.programCatalog = programsResult.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      cycle: row.cycle,
-      goalQ: Number(row.goal_q || 0),
-    }))
-    for (const row of recordsResult.rows) {
+    snapshot.ejecutivo.programCatalog = (programsR.data || []).map((row) => ({ id: row.id, name: row.name, cycle: row.cycle, goalQ: Number(row.goal_q || 0) }))
+    for (const row of recordsR.data || []) {
       if (!snapshot[row.area] || !Array.isArray(snapshot[row.area][row.criterion])) continue
-      snapshot[row.area][row.criterion].push({
-        id: row.id,
-        ...(row.payload || {}),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })
+      snapshot[row.area][row.criterion].push({ id: row.id, ...(row.payload || {}), createdAt: row.created_at, updatedAt: row.updated_at })
     }
-
-    snapshot.goals = buildGoalsSnapshot(goalsResult.rows, sellersByArea)
+    snapshot.goals = buildGoalsSnapshot(goalsR.data || [], sellersByArea)
     res.json({ sellersByArea, dataset: snapshot })
   } catch (err) {
     next(err)
@@ -290,19 +217,26 @@ dataRouter.post('/record', async (req, res, next) => {
     const parsed = saveSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { area, criterion, record } = parsed.data
-    const businessInsert = buildBusinessInsert(area, criterion, record, req.auth.user.id)
-    if (businessInsert) {
-      await writePrimaryThenBackup(businessInsert.q, businessInsert.p)
+
+    const businessMutation = buildBusinessMutation(area, criterion, record, req.auth.user.id)
+    if (businessMutation) {
+      const builder = supabaseAdminClient.from(businessMutation.table)
+      const response = businessMutation.upsert
+        ? await builder.upsert(businessMutation.row, { onConflict: businessMutation.onConflict })
+        : await builder.insert(businessMutation.row)
+      throwIfError(response.error)
     }
+
     const payload = { ...record }
     delete payload.id
-    const q = `
-      insert into public.app_records(area, criterion, payload, created_by)
-      values ($1, $2, $3::jsonb, $4)
-      returning id, created_at, updated_at
-    `
-    const r = await writePrimaryThenBackup(q, [area, criterion, JSON.stringify(payload), req.auth.user.id])
-    res.json({ ok: true, write: r })
+    const { error } = await supabaseAdminClient.from('app_records').insert({
+      area,
+      criterion,
+      payload,
+      created_by: req.auth.user.id,
+    })
+    throwIfError(error)
+    res.json({ ok: true, write: { source: 'supabase_only' } })
   } catch (err) {
     next(err)
   }
@@ -316,14 +250,13 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
     const { area, criterion, record } = parsed.data
     const payload = { ...record }
     delete payload.id
-
-    await writePrimaryThenBackup(
-      `update public.app_records
-       set payload = $2::jsonb, updated_at = now()
-       where id = $1 and area = $3 and criterion = $4`,
-      [id, JSON.stringify(payload), area, criterion],
-    )
-
+    const { error } = await supabaseAdminClient
+      .from('app_records')
+      .update({ payload, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('area', area)
+      .eq('criterion', criterion)
+    throwIfError(error)
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -333,7 +266,8 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
 dataRouter.delete('/record/:id', async (req, res, next) => {
   try {
     const { id } = req.params
-    await writePrimaryThenBackup(`delete from public.app_records where id = $1`, [id])
+    const { error } = await supabaseAdminClient.from('app_records').delete().eq('id', id)
+    throwIfError(error)
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -345,19 +279,13 @@ dataRouter.post('/program', async (req, res, next) => {
     const parsed = programSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { name, cycle, goalQ } = parsed.data
-    const q = `
-      insert into public.executive_programs(name, cycle, goal_q, is_active)
-      values ($1, $2, $3, true)
-      returning id, name, cycle, goal_q
-    `
-    const result = await readWithFailover(q, [name, cycle, Number(goalQ || 0)])
-    const row = result.rows?.[0]
-    res.json({
-      ok: true,
-      program: row
-        ? { id: row.id, name: row.name, cycle: row.cycle, goalQ: Number(row.goal_q || 0) }
-        : null,
-    })
+    const { data, error } = await supabaseAdminClient
+      .from('executive_programs')
+      .insert({ name, cycle, goal_q: Number(goalQ || 0), is_active: true })
+      .select('id, name, cycle, goal_q')
+      .single()
+    throwIfError(error)
+    res.json({ ok: true, program: data ? { id: data.id, name: data.name, cycle: data.cycle, goalQ: Number(data.goal_q || 0) } : null })
   } catch (err) {
     next(err)
   }
@@ -369,12 +297,11 @@ dataRouter.patch('/program/:id', async (req, res, next) => {
     const parsed = programSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { name, cycle, goalQ } = parsed.data
-    await writePrimaryThenBackup(
-      `update public.executive_programs
-       set name = $2, cycle = $3, goal_q = $4, updated_at = now()
-       where id = $1`,
-      [id, name, cycle, Number(goalQ || 0)],
-    )
+    const { error } = await supabaseAdminClient
+      .from('executive_programs')
+      .update({ name, cycle, goal_q: Number(goalQ || 0), updated_at: new Date().toISOString() })
+      .eq('id', id)
+    throwIfError(error)
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -384,10 +311,11 @@ dataRouter.patch('/program/:id', async (req, res, next) => {
 dataRouter.delete('/program/:id', async (req, res, next) => {
   try {
     const { id } = req.params
-    await writePrimaryThenBackup(
-      `update public.executive_programs set is_active = false, updated_at = now() where id = $1`,
-      [id],
-    )
+    const { error } = await supabaseAdminClient
+      .from('executive_programs')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    throwIfError(error)
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -401,22 +329,31 @@ dataRouter.post('/goal', async (req, res, next) => {
     const { area, criterion, seller = null, month = null, value, periodType = 'mensual', year } = parsed.data
     const vYear = Number(year || new Date().getFullYear())
 
-    await writePrimaryThenBackup(
-      `delete from public.area_goals
-       where area = $1
-         and criterion = $2
-         and coalesce(seller_name, '') = coalesce($3, '')
-         and coalesce(month, 0) = coalesce($4, 0)
-         and year = $5`,
-      [area, criterion, seller, month, vYear],
-    )
+    let deleteQuery = supabaseAdminClient
+      .from('area_goals')
+      .delete()
+      .eq('area', area)
+      .eq('criterion', criterion)
+      .eq('year', vYear)
 
-    await writePrimaryThenBackup(
-      `insert into public.area_goals(area, seller_name, criterion, month, year, value, period_type, created_by, updated_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
-      [area, seller, criterion, month, vYear, Number(value || 0), periodType, req.auth.user.id],
-    )
+    deleteQuery = seller === null ? deleteQuery.is('seller_name', null) : deleteQuery.eq('seller_name', seller)
+    deleteQuery = month === null ? deleteQuery.is('month', null) : deleteQuery.eq('month', month)
 
+    const { error: deleteError } = await deleteQuery
+    throwIfError(deleteError)
+
+    const { error: insertError } = await supabaseAdminClient.from('area_goals').insert({
+      area,
+      seller_name: seller,
+      criterion,
+      month,
+      year: vYear,
+      value: Number(value || 0),
+      period_type: periodType,
+      created_by: req.auth.user.id,
+      updated_by: req.auth.user.id,
+    })
+    throwIfError(insertError)
     res.json({ ok: true })
   } catch (err) {
     next(err)
