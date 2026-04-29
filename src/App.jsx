@@ -17,7 +17,7 @@ import {
 import './App.css'
 
 const AUTH_KEY = 'ventas_app_auth_v2'
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000').replace(/\/$/, '')
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://capi.nexlum.site').replace(/\/$/, '')
 const MONTHS = [
   'enero',
   'febrero',
