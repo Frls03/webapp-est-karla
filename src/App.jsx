@@ -19,7 +19,7 @@ import './App.css'
 const AUTH_KEY = 'ventas_app_auth_v2'
 function resolveApiBaseUrl(rawValue) {
   const input = String(rawValue || '').trim()
-  if (!input) return import.meta.env.DEV ? '' : 'https://capi.nexlum.site'
+  if (!input) return ''
   if (input.startsWith('/')) return input.replace(/\/$/, '')
   if (/^https?:\/\//i.test(input)) return input.replace(/\/$/, '')
   return `https://${input}`.replace(/\/$/, '')
