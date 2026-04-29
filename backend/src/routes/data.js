@@ -422,17 +422,7 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
 dataRouter.delete('/record/:id', async (req, res, next) => {
   try {
     const { id } = req.params
-    if (!isMaster(req.auth.profile)) {
-      const { data: existing, error: readError } = await supabaseAdminClient
-        .from('app_records')
-        .select('id, area, payload')
-        .eq('id', id)
-        .maybeSingle()
-      throwIfError(readError)
-      if (!existing) return res.status(404).json({ error: 'record_not_found' })
-      assertAdvisorArea(req.auth.profile, existing.area)
-      assertAdvisorSeller(req.auth.profile, existing?.payload?.seller)
-    }
+    if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const { error } = await supabaseAdminClient.from('app_records').delete().eq('id', id)
     throwIfError(error)
     res.json({ ok: true })

@@ -3349,14 +3349,15 @@ function DataTable({ area, criterion, rows, onDelete, onView, canDelete, canView
                   >
                     Ver/Editar
                   </button>
-                  <button
-                    type="button"
-                    className="danger-btn"
-                    onClick={() => onDelete(area, criterion, row.id)}
-                    disabled={!canDelete}
-                  >
-                    Eliminar
-                  </button>
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      className="danger-btn"
+                      onClick={() => onDelete(area, criterion, row.id)}
+                    >
+                      Eliminar
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             ))
