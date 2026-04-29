@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { createClient } from '@supabase/supabase-js'
 import ExcelJS from 'exceljs'
 import './App.css'
 
@@ -27,6 +28,22 @@ function resolveApiBaseUrl(rawValue) {
 }
 
 const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim()
+const SUPABASE_ANON_KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim()
+
+let supabaseBrowserClient = null
+function getSupabaseBrowserClient() {
+  if (supabaseBrowserClient) return supabaseBrowserClient
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null
+  supabaseBrowserClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: true,
+    },
+  })
+  return supabaseBrowserClient
+}
 
 function getFriendlyLoginError(error) {
   const raw = String(error?.message || '').toLowerCase()
@@ -712,6 +729,9 @@ function summarizeProgramHistory(entry) {
 }
 
 function App() {
+  const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/'
+  const isResetRequestRoute = currentPath === '/reset'
+  const isResetPasswordRoute = currentPath === '/reset-password'
   const [dataset, setDataset] = useState(() => buildAnnualDemoData())
   const [sellersByArea, setSellersByArea] = useState({ superior: [], ejecutivo: [], incompany: [] })
   const [auth, setAuth] = useState(() => {
@@ -757,6 +777,104 @@ function App() {
     ejecutivo: '',
     incompany: '',
   })
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState('')
+  const [resetMode, setResetMode] = useState('request')
+  const [resetMessage, setResetMessage] = useState('')
+  const [isResetLoading, setIsResetLoading] = useState(false)
+
+  useEffect(() => {
+    if (!isResetRequestRoute && !isResetPasswordRoute) return
+    const supabase = getSupabaseBrowserClient()
+    if (!supabase) return
+
+    let unsub = null
+    const hash = window.location.hash || ''
+    if (hash.includes('type=recovery') || hash.includes('access_token=')) {
+      setResetMode('update')
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) {
+        setResetMode('update')
+      }
+    })
+
+    const listener = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
+        setResetMode('update')
+      }
+    })
+    unsub = () => listener?.data?.subscription?.unsubscribe?.()
+
+    return () => {
+      if (unsub) unsub()
+    }
+  }, [isResetRequestRoute, isResetPasswordRoute])
+
+  async function handleRequestPasswordReset(event) {
+    event.preventDefault()
+    const supabase = getSupabaseBrowserClient()
+    if (!supabase) {
+      setResetMessage('No se encontró configuración de Supabase para recuperar contraseña.')
+      return
+    }
+    const email = sanitizeText(resetEmail, 120)
+    if (!email) {
+      setResetMessage('Ingresa tu correo para enviarte el enlace de recuperación.')
+      return
+    }
+    setIsResetLoading(true)
+    setResetMessage('')
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      if (error) throw error
+      setResetMessage('Te enviamos un correo para restablecer tu contraseña. Revisa tu bandeja y spam.')
+    } catch (err) {
+      console.error(err)
+      setResetMessage('No se pudo enviar el correo de recuperación. Verifica el correo e inténtalo de nuevo.')
+    } finally {
+      setIsResetLoading(false)
+    }
+  }
+
+  async function handleUpdatePassword(event) {
+    event.preventDefault()
+    const supabase = getSupabaseBrowserClient()
+    if (!supabase) {
+      setResetMessage('No se encontró configuración de Supabase para actualizar contraseña.')
+      return
+    }
+    if (!resetPassword || resetPassword.length < 6) {
+      setResetMessage('La nueva contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+    if (resetPassword !== resetPasswordConfirm) {
+      setResetMessage('Las contraseñas no coinciden. Inténtalo de nuevo.')
+      return
+    }
+    setIsResetLoading(true)
+    setResetMessage('')
+    try {
+      const { error } = await supabase.auth.updateUser({ password: resetPassword })
+      if (error) throw error
+      await supabase.auth.signOut()
+      setResetMessage('Contraseña actualizada con éxito. Ya puedes iniciar sesión.')
+      setResetPassword('')
+      setResetPasswordConfirm('')
+      setTimeout(() => {
+        window.location.href = '/'
+      }, 1200)
+    } catch (err) {
+      console.error(err)
+      setResetMessage('No se pudo actualizar la contraseña. Abre de nuevo el enlace del correo e inténtalo.')
+    } finally {
+      setIsResetLoading(false)
+    }
+  }
 
   const isMaster = auth?.role === 'master'
   const canAccessArea = (area) => isMaster || auth?.area === area
@@ -2279,6 +2397,65 @@ function App() {
     return rows.find((row) => row.id === recordViewer.id) || null
   }, [dataset, recordViewer])
 
+  if (isResetRequestRoute || isResetPasswordRoute) {
+    return (
+      <main className="login-screen">
+        <section className="login-card">
+          <h1>Recuperar contraseña</h1>
+          <p>
+            {isResetPasswordRoute || resetMode === 'update'
+              ? 'Ingresa tu nueva contraseña para actualizar tu acceso.'
+              : 'Te enviaremos un enlace de recuperación a tu correo.'}
+          </p>
+          {isResetPasswordRoute || resetMode === 'update' ? (
+            <form className="login-form" onSubmit={handleUpdatePassword}>
+              <label htmlFor="new-password">Nueva contraseña</label>
+              <input
+                id="new-password"
+                type="password"
+                value={resetPassword}
+                onChange={(event) => setResetPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              <label htmlFor="confirm-password">Confirmar contraseña</label>
+              <input
+                id="confirm-password"
+                type="password"
+                value={resetPasswordConfirm}
+                onChange={(event) => setResetPasswordConfirm(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              <button type="submit" className="primary-btn login-submit-btn" disabled={isResetLoading}>
+                {isResetLoading ? 'Actualizando...' : 'Actualizar contraseña'}
+              </button>
+            </form>
+          ) : (
+            <form className="login-form" onSubmit={handleRequestPasswordReset}>
+              <label htmlFor="reset-email">Correo</label>
+              <input
+                id="reset-email"
+                type="email"
+                value={resetEmail}
+                onChange={(event) => setResetEmail(event.target.value)}
+                autoComplete="email"
+                required
+              />
+              <button type="submit" className="primary-btn login-submit-btn" disabled={isResetLoading}>
+                {isResetLoading ? 'Enviando...' : 'Enviar enlace'}
+              </button>
+            </form>
+          )}
+          {resetMessage ? <p className="error-message">{resetMessage}</p> : null}
+          <small>
+            <a href="/">Volver al inicio de sesión</a>
+          </small>
+        </section>
+      </main>
+    )
+  }
+
   if (!auth) {
     return (
       <main className="login-screen">
@@ -2316,6 +2493,7 @@ function App() {
               )}
             </button>
             {loginError ? <p className="error-message">{loginError}</p> : null}
+            <a href="/reset">¿Olvidaste tu contraseña?</a>
           </form>
           <small>
             Accede con tu correo y contraseña asignados. Si tienes problemas para ingresar u olvidaste tu contraseña, contacta a tu administrador.
