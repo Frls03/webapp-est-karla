@@ -65,6 +65,28 @@ function throwIfError(error) {
   if (error) throw error
 }
 
+function isMaster(profile) {
+  return profile?.role === 'master'
+}
+
+function assertAdvisorArea(profile, area) {
+  if (isMaster(profile)) return
+  if (!profile?.area || profile.area !== area) {
+    const err = new Error('forbidden_area')
+    err.statusCode = 403
+    throw err
+  }
+}
+
+function assertAdvisorSeller(profile, seller) {
+  if (isMaster(profile)) return
+  if (!profile?.seller_name || seller !== profile.seller_name) {
+    const err = new Error('forbidden_seller')
+    err.statusCode = 403
+    throw err
+  }
+}
+
 function monthNum(monthText) {
   const key = String(monthText || '').toLowerCase()
   return MONTH_TO_NUM[key] || 1
@@ -188,11 +210,24 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
 
 dataRouter.get('/bootstrap', async (req, res, next) => {
   try {
+    const profile = req.auth.profile
+    const advisorMode = !isMaster(profile)
+
+    let sellersQuery = supabaseAdminClient.from('sellers').select('area, name').eq('is_active', true).order('area').order('name')
+    let recordsQuery = supabaseAdminClient.from('app_records').select('id, area, criterion, payload, created_at, updated_at').order('created_at', { ascending: true })
+    let goalsQuery = supabaseAdminClient.from('area_goals').select('area, seller_name, criterion, month, value')
+
+    if (advisorMode) {
+      sellersQuery = sellersQuery.eq('area', profile.area).eq('name', profile.seller_name)
+      recordsQuery = recordsQuery.eq('area', profile.area)
+      goalsQuery = goalsQuery.eq('area', profile.area).or(`seller_name.eq.${profile.seller_name},seller_name.is.null`)
+    }
+
     const [sellersR, recordsR, programsR, goalsR] = await Promise.all([
-      supabaseAdminClient.from('sellers').select('area, name').eq('is_active', true).order('area').order('name'),
-      supabaseAdminClient.from('app_records').select('id, area, criterion, payload, created_at, updated_at').order('created_at', { ascending: true }),
+      sellersQuery,
+      recordsQuery,
       supabaseAdminClient.from('executive_programs').select('id, name, cycle, goal_q').eq('is_active', true).order('created_at', { ascending: true }),
-      supabaseAdminClient.from('area_goals').select('area, seller_name, criterion, month, value'),
+      goalsQuery,
     ])
     throwIfError(sellersR.error); throwIfError(recordsR.error); throwIfError(programsR.error); throwIfError(goalsR.error)
 
@@ -202,6 +237,7 @@ dataRouter.get('/bootstrap', async (req, res, next) => {
     const snapshot = emptySnapshot()
     snapshot.ejecutivo.programCatalog = (programsR.data || []).map((row) => ({ id: row.id, name: row.name, cycle: row.cycle, goalQ: Number(row.goal_q || 0) }))
     for (const row of recordsR.data || []) {
+      if (advisorMode && row?.payload?.seller !== profile.seller_name) continue
       if (!snapshot[row.area] || !Array.isArray(snapshot[row.area][row.criterion])) continue
       snapshot[row.area][row.criterion].push({ id: row.id, ...(row.payload || {}), createdAt: row.created_at, updatedAt: row.updated_at })
     }
@@ -217,6 +253,8 @@ dataRouter.post('/record', async (req, res, next) => {
     const parsed = saveSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { area, criterion, record } = parsed.data
+    assertAdvisorArea(req.auth.profile, area)
+    assertAdvisorSeller(req.auth.profile, record.seller)
 
     const businessMutation = buildBusinessMutation(area, criterion, record, req.auth.user.id)
     if (businessMutation) {
@@ -248,6 +286,8 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { id } = req.params
     const { area, criterion, record } = parsed.data
+    assertAdvisorArea(req.auth.profile, area)
+    assertAdvisorSeller(req.auth.profile, record.seller)
     const payload = { ...record }
     delete payload.id
     const { error } = await supabaseAdminClient
@@ -266,6 +306,17 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
 dataRouter.delete('/record/:id', async (req, res, next) => {
   try {
     const { id } = req.params
+    if (!isMaster(req.auth.profile)) {
+      const { data: existing, error: readError } = await supabaseAdminClient
+        .from('app_records')
+        .select('id, area, payload')
+        .eq('id', id)
+        .maybeSingle()
+      throwIfError(readError)
+      if (!existing) return res.status(404).json({ error: 'record_not_found' })
+      assertAdvisorArea(req.auth.profile, existing.area)
+      assertAdvisorSeller(req.auth.profile, existing?.payload?.seller)
+    }
     const { error } = await supabaseAdminClient.from('app_records').delete().eq('id', id)
     throwIfError(error)
     res.json({ ok: true })
@@ -276,6 +327,7 @@ dataRouter.delete('/record/:id', async (req, res, next) => {
 
 dataRouter.post('/program', async (req, res, next) => {
   try {
+    if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const parsed = programSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { name, cycle, goalQ } = parsed.data
@@ -293,6 +345,7 @@ dataRouter.post('/program', async (req, res, next) => {
 
 dataRouter.patch('/program/:id', async (req, res, next) => {
   try {
+    if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const { id } = req.params
     const parsed = programSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
@@ -310,6 +363,7 @@ dataRouter.patch('/program/:id', async (req, res, next) => {
 
 dataRouter.delete('/program/:id', async (req, res, next) => {
   try {
+    if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const { id } = req.params
     const { error } = await supabaseAdminClient
       .from('executive_programs')
@@ -324,6 +378,7 @@ dataRouter.delete('/program/:id', async (req, res, next) => {
 
 dataRouter.post('/goal', async (req, res, next) => {
   try {
+    if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const parsed = goalSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { area, criterion, seller = null, month = null, value, periodType = 'mensual', year } = parsed.data

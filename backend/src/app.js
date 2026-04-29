@@ -21,7 +21,10 @@ app.use('/data', authRequired, dataRouter)
 
 app.use((err, req, res, next) => {
   console.error(err)
-  res.status(500).json({ error: 'internal_error', message: err?.message || 'Unexpected error' })
+  const status = Number(err?.statusCode || err?.status || 500)
+  const error = status >= 500 ? 'internal_error' : err?.message || 'request_error'
+  const message = err?.message || 'Unexpected error'
+  res.status(status).json({ error, message })
 })
 
 export default app

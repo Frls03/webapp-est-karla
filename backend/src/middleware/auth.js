@@ -15,17 +15,39 @@ export async function authRequired(req, res, next) {
     if (error || !data?.user) return res.status(401).json({ error: 'invalid_token' })
 
     const user = data.user
-    const { data: profile, error: profileError } = await supabaseAdminClient
+    const { data: adminProfile, error: adminProfileError } = await supabaseAdminClient
       .from('admin_profiles')
       .select('user_id, role, is_active, display_name, area, seller_name')
       .eq('user_id', user.id)
       .maybeSingle()
-    if (profileError) throw profileError
-    if (!profile || !profile.is_active) {
+    if (adminProfileError) throw adminProfileError
+
+    if (adminProfile?.is_active && adminProfile?.role === 'master') {
+      req.auth = { user, profile: adminProfile, accessToken: token }
+      next()
+      return
+    }
+
+    const { data: advisorProfile, error: advisorProfileError } = await supabaseAdminClient
+      .from('profiles')
+      .select('id, full_name, role, is_active, area, seller_name')
+      .eq('id', user.id)
+      .maybeSingle()
+    if (advisorProfileError) throw advisorProfileError
+    if (!advisorProfile || !advisorProfile.is_active) {
       return res.status(403).json({ error: 'inactive_or_missing_profile' })
     }
 
-    req.auth = { user, profile, accessToken: token }
+    const normalizedAdvisor = {
+      user_id: advisorProfile.id,
+      display_name: advisorProfile.full_name,
+      role: advisorProfile.role === 'master' ? 'master' : 'advisor',
+      is_active: advisorProfile.is_active,
+      area: advisorProfile.area,
+      seller_name: advisorProfile.seller_name,
+    }
+
+    req.auth = { user, profile: normalizedAdvisor, accessToken: token }
     next()
   } catch (err) {
     next(err)
