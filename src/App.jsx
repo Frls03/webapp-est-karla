@@ -557,7 +557,12 @@ function calculateComplianceScore({ propuestas, alianzas, citas, contactabilidad
 }
 
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const normalizedPath = String(path || '').startsWith('/') ? String(path) : `/${String(path || '')}`
+  const finalPath =
+    API_BASE_URL.endsWith('/api') && normalizedPath.startsWith('/api/')
+      ? normalizedPath.slice(4)
+      : normalizedPath
+  const response = await fetch(`${API_BASE_URL}${finalPath}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
