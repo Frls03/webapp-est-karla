@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import ExcelJS from 'exceljs'
 import './App.css'
 
 const AUTH_KEY = 'ventas_app_auth_v2'
@@ -118,11 +119,10 @@ const CRITERIA_LABELS = {
 
 
 const EXEC_STATUS = [
-  'No participará',
   'Presentación',
-  'Seguimiento con cita',
-  'Seguimiento sin cita',
+  'Precierre',
   'Venta',
+  'Declinado',
 ]
 const SUPERIOR_LEAD_STATUS = ['No participará', 'Presentación', 'Seguimiento', 'Venta', 'Cancelada']
 const SUPERIOR_ALIANZA_STATUS = ['Cita', 'En proceso', 'Renovada', 'Escritorio informativo']
@@ -517,7 +517,18 @@ const INITIAL_FORMS = {
     },
   },
   ejecutivo: {
-    leads: { month: 'enero', seller: '', empresa: '', cliente: '', programId: '', estatus: EXEC_STATUS[0], ventaQ: '' },
+    leads: {
+      month: 'enero',
+      seller: '',
+      empresa: '',
+      cliente: '',
+      telefono: '',
+      correo: '',
+      programId: '',
+      estatus: EXEC_STATUS[0],
+      cotizacionQ: '',
+      ventaQ: '',
+    },
     llamadas: { month: 'enero', seller: '', totalLlamadas: '' },
     datosActualizados: { month: 'enero', seller: '', empresa: '', nombre: '', cargo: '', telefono: '', correo: '' },
     clientesNuevos: { month: 'enero', seller: '', empresa: '', nombre: '', cargo: '', telefono: '', correo: '' },
@@ -586,9 +597,30 @@ async function apiRequest(path, { method = 'GET', token, body } = {}) {
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new Error(data?.message || data?.error || `Request failed (${response.status})`)
+    const error = new Error(data?.message || data?.error || `Request failed (${response.status})`)
+    error.status = response.status
+    error.code = data?.error || null
+    throw error
   }
   return data
+}
+
+function statusClassName(value) {
+  const v = String(value || '').toLowerCase()
+  if (v.includes('venta') || v.includes('cierre') || v.includes('cerrada') || v.includes('cerrado') || v.includes('renovada')) {
+    return 'status-success'
+  }
+  if (v.includes('declin') || v.includes('cancel')) {
+    return 'status-danger'
+  }
+  if (v.includes('present') || v.includes('seguim') || v.includes('proceso') || v.includes('pre-cierre') || v.includes('precierre') || v.includes('solicitud')) {
+    return 'status-warn'
+  }
+  return 'status-neutral'
+}
+
+function renderStatusBadge(value) {
+  return <span className={`status-badge ${statusClassName(value)}`}>{value || 'N/A'}</span>
 }
 
 function mergeWithDefaults(remoteDataset) {
@@ -643,6 +675,42 @@ function asNAWhenZero(value, formatter) {
   return value > 0 ? formatter(value) : 'N/A'
 }
 
+function sanitizeSheetName(name) {
+  return String(name || 'Hoja')
+    .replace(/[:\\/?*\[\]]/g, ' ')
+    .slice(0, 31)
+}
+
+function normalizeExportValue(value) {
+  if (value == null) return ''
+  if (Array.isArray(value)) return value.join(' | ')
+  if (typeof value === 'object') return JSON.stringify(value)
+  return value
+}
+
+function normalizeExportRow(row = {}) {
+  const normalized = {}
+  Object.entries(row).forEach(([key, value]) => {
+    normalized[key] = normalizeExportValue(value)
+  })
+  return normalized
+}
+
+function summarizeProgramHistory(entry) {
+  const before = entry?.before || {}
+  const after = entry?.after || {}
+  const changes = []
+  if (before.name !== after.name && (before.name != null || after.name != null)) changes.push(`Nombre: ${before.name || '-'} -> ${after.name || '-'}`)
+  if (before.cycle !== after.cycle && (before.cycle != null || after.cycle != null)) changes.push(`Periodo: ${before.cycle || '-'} -> ${after.cycle || '-'}`)
+  if (Number(before.goalQ || 0) !== Number(after.goalQ || 0)) changes.push(`Meta Q: ${formatCurrency(Number(before.goalQ || 0))} -> ${formatCurrency(Number(after.goalQ || 0))}`)
+  if (changes.length === 0) {
+    if (entry?.action === 'CREATED') return ['Programa creado']
+    if (entry?.action === 'DEACTIVATED') return ['Programa desactivado']
+    return ['Sin detalle de cambios']
+  }
+  return changes
+}
+
 function App() {
   const [dataset, setDataset] = useState(() => buildAnnualDemoData())
   const [sellersByArea, setSellersByArea] = useState({ superior: [], ejecutivo: [], incompany: [] })
@@ -682,6 +750,8 @@ function App() {
   const [confirmDialog, setConfirmDialog] = useState(null)
   const [recordViewer, setRecordViewer] = useState(null)
   const [recordDraft, setRecordDraft] = useState(null)
+  const [commentDraft, setCommentDraft] = useState('')
+  const [programEditor, setProgramEditor] = useState(null)
   const [goalSellerByArea, setGoalSellerByArea] = useState({
     superior: '',
     ejecutivo: '',
@@ -706,6 +776,51 @@ function App() {
   const periodMetaLabel = useMemo(() => getPeriodMetaLabel(periodType), [periodType])
   const executivePrograms = dataset.ejecutivo.programCatalog || []
   const activeYear = new Date().getFullYear()
+
+  async function handleExportExcel() {
+    try {
+      const workbook = new ExcelJS.Workbook()
+
+      Object.entries(AREA_CONFIG).forEach(([areaKey, areaConfig]) => {
+        areaConfig.criteria.forEach((criterionKey) => {
+          const rows = dataset?.[areaKey]?.[criterionKey]
+          if (!Array.isArray(rows) || rows.length === 0) return
+          const normalizedRows = rows.map((row) => normalizeExportRow(row))
+          const sheetName = sanitizeSheetName(`${areaKey}_${criterionKey}`)
+          const worksheet = workbook.addWorksheet(sheetName)
+          const columns = Object.keys(normalizedRows[0] || {})
+          worksheet.columns = columns.map((key) => ({ header: key, key, width: 20 }))
+          worksheet.addRows(normalizedRows)
+        })
+      })
+
+      if (dataset?.ejecutivo?.programCatalog?.length) {
+        const programRows = dataset.ejecutivo.programCatalog.map((row) => normalizeExportRow(row))
+        const worksheet = workbook.addWorksheet(sanitizeSheetName('ejecutivo_programas'))
+        const columns = Object.keys(programRows[0] || {})
+        worksheet.columns = columns.map((key) => ({ header: key, key, width: 20 }))
+        worksheet.addRows(programRows)
+      }
+
+      const fileStamp = new Date().toISOString().slice(0, 10)
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `panel_comercial_${fileStamp}.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setFlashMessage('Excel generado correctamente.')
+    } catch (err) {
+      console.error(err)
+      setFlashMessage('No se pudo generar el Excel.')
+    }
+  }
 
   function persistGoal({ area, criterion, seller = null, month = null, value, periodType = 'mensual' }) {
     if (!auth?.accessToken) return
@@ -769,6 +884,14 @@ function App() {
         setDatasetHydrated(true)
       } catch (err) {
         if (cancelled) return
+        const isAuthExpired = err?.status === 401 || err?.code === 'invalid_token' || String(err?.message || '').includes('invalid_token')
+        if (isAuthExpired) {
+          setAuth(null)
+          sessionStorage.removeItem(AUTH_KEY)
+          setFlashMessage('Sesión expirada. Inicia sesión nuevamente.')
+          setDatasetHydrated(false)
+          return
+        }
         console.error(err)
         setFlashMessage('No se pudo cargar registros desde servidor')
         setDatasetHydrated(false)
@@ -1104,11 +1227,13 @@ function App() {
   function openRecordViewer(area, criterion, row) {
     setRecordViewer({ area, criterion, id: row.id })
     setRecordDraft({ ...row })
+    setCommentDraft('')
   }
 
   function closeRecordViewer() {
     setRecordViewer(null)
     setRecordDraft(null)
+    setCommentDraft('')
   }
 
   function updateRecordDraft(field, value) {
@@ -1331,7 +1456,12 @@ function App() {
 
     if (activeArea === 'ejecutivo') {
       if (activeCriterion === 'leads') {
-        if (!requireText(current.empresa, 'Empresa') || !requireText(current.cliente, 'Cliente')) {
+        if (
+          !requireText(current.empresa, 'Empresa') ||
+          !requireText(current.cliente, 'Cliente') ||
+          !requireText(current.telefono, 'Telefono') ||
+          !requireText(current.correo, 'Correo')
+        ) {
           return
         }
         const program = dataset.ejecutivo.programCatalog.find((item) => item.id === current.programId)
@@ -1345,9 +1475,12 @@ function App() {
           seller: finalSeller,
           empresa: sanitizeText(current.empresa, 80),
           cliente: sanitizeText(current.cliente, 80),
+          telefono: sanitizeText(current.telefono, 30),
+          correo: sanitizeText(current.correo, 90),
           programId: current.programId,
           programName: program.name,
           estatus: sanitizeText(current.estatus, 60),
+          cotizacionQ: toNumber(current.cotizacionQ),
           ventaQ: current.estatus === 'Venta' ? toNumber(current.ventaQ) : 0,
         })
       }
@@ -1496,7 +1629,74 @@ function App() {
       }
     }
 
+    setForms((prev) => ({
+      ...prev,
+      [activeArea]: {
+        ...prev[activeArea],
+        [activeCriterion]: { ...INITIAL_FORMS[activeArea][activeCriterion] },
+      },
+    }))
     setFlashMessage('Registro guardado correctamente')
+  }
+
+  function addInternalComment() {
+    if (!recordViewer || !selectedRecord) return
+    const text = sanitizeText(commentDraft, 500)
+    if (!text) {
+      setFlashMessage('Escribe un comentario antes de guardar')
+      return
+    }
+    if (!canEditRecord(recordViewer.area, recordViewer.criterion, selectedRecord)) {
+      setFlashMessage('No tienes permisos para comentar este registro')
+      return
+    }
+
+    const entry = {
+      id: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      by: auth?.name || auth?.username || 'Sistema',
+      text,
+    }
+
+    const updatedRecord = {
+      ...selectedRecord,
+      internalComments: [...(selectedRecord.internalComments || []), entry],
+      updatedAt: entry.at,
+      changeHistory: [
+        ...(selectedRecord.changeHistory || []),
+        {
+          id: crypto.randomUUID(),
+          at: entry.at,
+          by: entry.by,
+          action: 'COMMENTED',
+          changes: [`Comentario interno: "${text}"`],
+        },
+      ],
+    }
+
+    setDataset((prev) => ({
+      ...prev,
+      [recordViewer.area]: {
+        ...prev[recordViewer.area],
+        [recordViewer.criterion]: prev[recordViewer.area][recordViewer.criterion].map((row) =>
+          row.id === selectedRecord.id ? updatedRecord : row,
+        ),
+      },
+    }))
+
+    if (auth?.accessToken) {
+      apiRequest(`/api/data/record/${selectedRecord.id}`, {
+        method: 'PATCH',
+        token: auth.accessToken,
+        body: { area: recordViewer.area, criterion: recordViewer.criterion, record: updatedRecord },
+      }).catch((err) => {
+        console.error(err)
+        setFlashMessage('No se pudo guardar el comentario en servidor')
+      })
+    }
+
+    setCommentDraft('')
+    setFlashMessage('Comentario interno agregado')
   }
 
   function addProgramConfig(event) {
@@ -1551,31 +1751,58 @@ function App() {
 
   function editProgramConfig(program) {
     if (!isMaster || !auth?.accessToken) return
-    const newName = window.prompt('Nombre del programa', program.name)
-    if (!newName) return
-    const newCycle = window.prompt('Ciclo (enero..diciembre o anual)', program.cycle)
-    if (!newCycle) return
-    const newGoalRaw = window.prompt('Meta Q', `${program.goalQ || 0}`)
-    if (newGoalRaw == null) return
+    setProgramEditor({
+      id: program.id,
+      name: program.name || '',
+      cycle: program.cycle || 'anual',
+      goalQ: String(program.goalQ ?? 0),
+      history: Array.isArray(program.changeHistory) ? program.changeHistory : [],
+      saving: false,
+    })
+  }
+
+  function closeProgramEditor() {
+    setProgramEditor(null)
+  }
+
+  function updateProgramEditorField(field, value) {
+    setProgramEditor((prev) => {
+      if (!prev) return prev
+      return { ...prev, [field]: value }
+    })
+  }
+
+  async function saveProgramConfigChanges() {
+    if (!isMaster || !auth?.accessToken || !programEditor) return
     const payload = {
-      name: sanitizeText(newName, 80),
-      cycle: sanitizeText(newCycle, 20).toLowerCase(),
-      goalQ: toNumber(newGoalRaw),
+      name: sanitizeText(programEditor.name, 80),
+      cycle: sanitizeText(programEditor.cycle, 20).toLowerCase(),
+      goalQ: toNumber(programEditor.goalQ),
     }
-    apiRequest(`/api/data/program/${program.id}`, { method: 'PATCH', token: auth.accessToken, body: payload })
+    if (!payload.name) {
+      setFlashMessage('El nombre del programa es obligatorio')
+      return
+    }
+    if (!(await askConfirmation('¿Seguro de cambiar estos datos?'))) return
+    setProgramEditor((prev) => (prev ? { ...prev, saving: true } : prev))
+    apiRequest(`/api/data/program/${programEditor.id}`, { method: 'PATCH', token: auth.accessToken, body: payload })
       .then(() => {
         setDataset((prev) => ({
           ...prev,
           ejecutivo: {
             ...prev.ejecutivo,
-            programCatalog: prev.ejecutivo.programCatalog.map((p) => (p.id === program.id ? { ...p, ...payload } : p)),
+            programCatalog: prev.ejecutivo.programCatalog.map((p) => (p.id === programEditor.id ? { ...p, ...payload } : p)),
           },
         }))
         setFlashMessage('Programa actualizado')
+        closeProgramEditor()
       })
       .catch((err) => {
         console.error(err)
         setFlashMessage(`No se pudo actualizar programa: ${err.message}`)
+      })
+      .finally(() => {
+        setProgramEditor((prev) => (prev ? { ...prev, saving: false } : prev))
       })
   }
 
@@ -2149,6 +2376,15 @@ function App() {
               </select>
             </label>
           ) : null}
+          <button
+            type="button"
+            className="excel-btn"
+            onClick={handleExportExcel}
+            disabled={!datasetHydrated}
+            title="Descargar datos en Excel"
+          >
+            Descargar Excel
+          </button>
           <button type="button" className="ghost-btn" onClick={() => setView('dashboard')}>Dashboard</button>
           {isMaster ? <button type="button" className="ghost-btn" onClick={() => setView('metas')}>Metas</button> : null}
           <button type="button" className="ghost-btn" onClick={() => setView('ingreso')}>Ingreso datos</button>
@@ -2719,6 +2955,41 @@ function App() {
                   </button>
                 </div>
 
+                <h4>Comentarios internos</h4>
+                <div className="comment-box">
+                  <textarea
+                    value={commentDraft}
+                    onChange={(event) => setCommentDraft(event.target.value)}
+                    placeholder="Escribe un comentario interno..."
+                    rows={3}
+                    disabled={!canEditRecord(recordViewer.area, recordViewer.criterion, selectedRecord)}
+                  />
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    onClick={addInternalComment}
+                    disabled={!canEditRecord(recordViewer.area, recordViewer.criterion, selectedRecord)}
+                  >
+                    Guardar comentario
+                  </button>
+                </div>
+                <div className="history-list">
+                  {(selectedRecord.internalComments || []).length === 0 ? (
+                    <p>Sin comentarios internos.</p>
+                  ) : (
+                    (selectedRecord.internalComments || [])
+                      .slice()
+                      .reverse()
+                      .map((item) => (
+                        <div key={item.id} className="history-item">
+                          <strong>{item.by}</strong>
+                          <span>{item.at}</span>
+                          <p>{item.text}</p>
+                        </div>
+                      ))
+                  )}
+                </div>
+
                 <h4>Histórico de cambios</h4>
                 <div className="history-list">
                   {(selectedRecord.changeHistory || []).length === 0 ? (
@@ -2744,6 +3015,80 @@ function App() {
             ) : (
               <p>El registro ya no existe o fue eliminado.</p>
             )}
+          </article>
+        </div>
+      ) : null}
+      {programEditor ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Editar programa">
+          <article className="record-viewer modal">
+            <h3>Editar programa y meta</h3>
+            <div className="record-edit-grid">
+              <label>
+                Nombre del programa
+                <input
+                  value={programEditor.name}
+                  onChange={(event) => updateProgramEditorField('name', event.target.value)}
+                  disabled={programEditor.saving}
+                />
+              </label>
+              <label>
+                Periodo
+                <select
+                  value={programEditor.cycle}
+                  onChange={(event) => updateProgramEditorField('cycle', event.target.value)}
+                  disabled={programEditor.saving}
+                >
+                  {MONTHS.map((month) => (
+                    <option key={month} value={month}>
+                      {month}
+                    </option>
+                  ))}
+                  <option value="anual">anual</option>
+                </select>
+              </label>
+              <label>
+                Meta Q
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={programEditor.goalQ}
+                  onChange={(event) => updateProgramEditorField('goalQ', event.target.value)}
+                  disabled={programEditor.saving}
+                />
+              </label>
+            </div>
+
+            <div className="record-actions">
+              <button type="button" className="primary-btn" onClick={saveProgramConfigChanges} disabled={programEditor.saving}>
+                {programEditor.saving ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+              <button type="button" className="ghost-btn" onClick={closeProgramEditor} disabled={programEditor.saving}>
+                Cerrar
+              </button>
+            </div>
+
+            <h4>Histórico de cambios</h4>
+            <div className="history-list">
+              {(programEditor.history || []).length === 0 ? (
+                <p>Sin cambios registrados.</p>
+              ) : (
+                (programEditor.history || [])
+                  .slice()
+                  .reverse()
+                  .map((item) => (
+                    <div key={item.id} className="history-item">
+                      <strong>{item.action}</strong>
+                      <span>{item.by} - {item.at}</span>
+                      <ul>
+                        {summarizeProgramHistory(item).map((change) => (
+                          <li key={change}>{change}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))
+              )}
+            </div>
           </article>
         </div>
       ) : null}
@@ -2837,6 +3182,8 @@ function renderCriterionFields({ area, criterion, forms, dataset, updateForm, is
       <>
         <label>Empresa<input value={current.empresa} onChange={(event) => updateForm(area, criterion, 'empresa', event.target.value)} /></label>
         <label>Cliente<input value={current.cliente} onChange={(event) => updateForm(area, criterion, 'cliente', event.target.value)} /></label>
+        <label>Telefono<input value={current.telefono} onChange={(event) => updateForm(area, criterion, 'telefono', event.target.value)} /></label>
+        <label>Correo<input type="email" value={current.correo} onChange={(event) => updateForm(area, criterion, 'correo', event.target.value)} /></label>
         <label>
           Programa interes
           <select value={current.programId} onChange={(event) => updateForm(area, criterion, 'programId', event.target.value)}>
@@ -2855,6 +3202,16 @@ function renderCriterionFields({ area, criterion, forms, dataset, updateForm, is
               <option key={status} value={status}>{status}</option>
             ))}
           </select>
+        </label>
+        <label>
+          Cotizacion Q
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={current.cotizacionQ}
+            onChange={(event) => updateForm(area, criterion, 'cotizacionQ', event.target.value)}
+          />
         </label>
         <label>
           Venta Q
@@ -3017,7 +3374,7 @@ function getColumns(area, criterion) {
       { key: 'seller', label: 'Asesor' },
       { key: 'nombre', label: 'Nombre' },
       { key: 'carrera', label: 'Carrera' },
-      { key: 'estado', label: 'Estado' },
+      { key: 'estado', label: 'Estado', format: (value) => renderStatusBadge(value) },
       { key: 'ventaQ', label: 'Venta', format: (value) => formatCurrency(value) },
     ]
   }
@@ -3026,7 +3383,7 @@ function getColumns(area, criterion) {
       { key: 'month', label: 'Mes' },
       { key: 'seller', label: 'Asesor' },
       { key: 'empresa', label: 'Empresa' },
-      { key: 'estatus', label: 'Estatus' },
+      { key: 'estatus', label: 'Estatus', format: (value) => renderStatusBadge(value) },
       { key: 'fechaEscritorio', label: 'Fecha' },
     ]
   }
@@ -3062,8 +3419,11 @@ function getColumns(area, criterion) {
       { key: 'seller', label: 'Asesor' },
       { key: 'empresa', label: 'Empresa' },
       { key: 'cliente', label: 'Cliente' },
+      { key: 'telefono', label: 'Telefono' },
+      { key: 'correo', label: 'Correo' },
       { key: 'programName', label: 'Programa' },
-      { key: 'estatus', label: 'Estatus' },
+      { key: 'estatus', label: 'Estatus', format: (value) => renderStatusBadge(value) },
+      { key: 'cotizacionQ', label: 'Cotizacion', format: (value) => formatCurrency(value) },
       { key: 'ventaQ', label: 'Venta', format: (value) => formatCurrency(value) },
     ]
   }
@@ -3104,7 +3464,7 @@ function getColumns(area, criterion) {
       { key: 'empresa', label: 'Empresa' },
       { key: 'tipologiaCurso', label: 'Tipologia' },
       { key: 'nombreCurso', label: 'Curso' },
-      { key: 'estatus', label: 'Estatus' },
+      { key: 'estatus', label: 'Estatus', format: (value) => renderStatusBadge(value) },
       { key: 'inversion', label: 'Inversion', format: (value) => formatCurrency(value) },
       { key: 'totalFinalQ', label: 'Total final', format: (value) => formatCurrency(value) },
     ]

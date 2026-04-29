@@ -65,6 +65,29 @@ function throwIfError(error) {
   if (error) throw error
 }
 
+function mapProgramHistoryEntry(row) {
+  return {
+    id: row.id,
+    action: row.action || 'UPDATED',
+    by: row.changed_by || 'system',
+    at: row.changed_at,
+    before: row.before_data || null,
+    after: row.after_data || null,
+  }
+}
+
+async function logProgramChange({ rowId, action, changedBy, beforeData = null, afterData = null }) {
+  const { error } = await supabaseAdminClient.from('change_log').insert({
+    table_name: 'executive_programs',
+    row_id: rowId,
+    action,
+    changed_by: changedBy || null,
+    before_data: beforeData,
+    after_data: afterData,
+  })
+  throwIfError(error)
+}
+
 function isMaster(profile) {
   return profile?.role === 'master'
 }
@@ -148,7 +171,22 @@ function buildBusinessMutation(area, criterion, record, userId) {
       upsert: true,
       onConflict: 'year,month,seller_name,is_cumplimiento',
     },
-    'ejecutivo:leads': { table: 'ejecutivo_leads', row: { ...base, empresa: record.empresa || '', cliente: record.cliente || '', program_id: record.programId || null, program_name: record.programName || '', estatus: record.estatus || '', venta_q: Number(record.ventaQ || 0) } },
+    'ejecutivo:leads': {
+      table: 'ejecutivo_leads',
+      row: {
+        id: record.id,
+        ...base,
+        empresa: record.empresa || '',
+        cliente: record.cliente || '',
+        telefono: record.telefono || '',
+        correo: record.correo || '',
+        program_id: record.programId || null,
+        program_name: record.programName || '',
+        estatus: record.estatus || '',
+        cotizacion_q: Number(record.cotizacionQ || 0),
+        venta_q: Number(record.ventaQ || 0),
+      },
+    },
     'ejecutivo:llamadas': { table: 'ejecutivo_llamadas', row: { ...base, total_llamadas: Number(record.totalLlamadas || 0) } },
     'ejecutivo:datosActualizados': { table: 'ejecutivo_datos_actualizados', row: { ...base, empresa: record.empresa || '', nombre: record.nombre || '', cargo: record.cargo || '', telefono: record.telefono || '', correo: record.correo || '' } },
     'ejecutivo:clientesNuevos': { table: 'ejecutivo_clientes_nuevos', row: { ...base, empresa: record.empresa || '', nombre: record.nombre || '', cargo: record.cargo || '', telefono: record.telefono || '', correo: record.correo || '' } },
@@ -159,6 +197,44 @@ function buildBusinessMutation(area, criterion, record, userId) {
   }
 
   return map[`${area}:${criterion}`] || null
+}
+
+function buildBusinessUpdate(area, criterion, record, userId) {
+  if (area === 'ejecutivo' && criterion === 'leads' && record?.id) {
+    return {
+      table: 'ejecutivo_leads',
+      id: record.id,
+      fullRow: {
+        id: record.id,
+        month: monthNum(record.month),
+        year: Number(record.year || new Date().getFullYear()),
+        seller_name: record.seller || '',
+        empresa: record.empresa || '',
+        cliente: record.cliente || '',
+        telefono: record.telefono || '',
+        correo: record.correo || '',
+        program_id: record.programId || null,
+        program_name: record.programName || '',
+        estatus: record.estatus || '',
+        cotizacion_q: Number(record.cotizacionQ || 0),
+        venta_q: Number(record.ventaQ || 0),
+        updated_by: userId,
+      },
+      row: {
+        empresa: record.empresa || '',
+        cliente: record.cliente || '',
+        telefono: record.telefono || '',
+        correo: record.correo || '',
+        program_id: record.programId || null,
+        program_name: record.programName || '',
+        estatus: record.estatus || '',
+        cotizacion_q: Number(record.cotizacionQ || 0),
+        venta_q: Number(record.ventaQ || 0),
+        updated_by: userId,
+      },
+    }
+  }
+  return null
 }
 
 function emptySnapshot() {
@@ -235,7 +311,30 @@ dataRouter.get('/bootstrap', async (req, res, next) => {
     for (const row of sellersR.data || []) if (sellersByArea[row.area]) sellersByArea[row.area].push(row.name)
 
     const snapshot = emptySnapshot()
-    snapshot.ejecutivo.programCatalog = (programsR.data || []).map((row) => ({ id: row.id, name: row.name, cycle: row.cycle, goalQ: Number(row.goal_q || 0) }))
+    const programRows = programsR.data || []
+    const programIds = programRows.map((row) => row.id)
+    let programHistoryById = new Map()
+    if (programIds.length > 0) {
+      const { data: historyRows, error: historyError } = await supabaseAdminClient
+        .from('change_log')
+        .select('id, row_id, action, changed_by, changed_at, before_data, after_data')
+        .eq('table_name', 'executive_programs')
+        .in('row_id', programIds)
+        .order('changed_at', { ascending: true })
+      throwIfError(historyError)
+      for (const row of historyRows || []) {
+        const current = programHistoryById.get(row.row_id) || []
+        current.push(mapProgramHistoryEntry(row))
+        programHistoryById.set(row.row_id, current)
+      }
+    }
+    snapshot.ejecutivo.programCatalog = programRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      cycle: row.cycle,
+      goalQ: Number(row.goal_q || 0),
+      changeHistory: programHistoryById.get(row.id) || [],
+    }))
     for (const row of recordsR.data || []) {
       if (advisorMode && row?.payload?.seller !== profile.seller_name) continue
       if (!snapshot[row.area] || !Array.isArray(snapshot[row.area][row.criterion])) continue
@@ -290,6 +389,23 @@ dataRouter.patch('/record/:id', async (req, res, next) => {
     assertAdvisorSeller(req.auth.profile, record.seller)
     const payload = { ...record }
     delete payload.id
+
+    const businessUpdate = buildBusinessUpdate(area, criterion, record, req.auth.user.id)
+    if (businessUpdate) {
+      const { data: updatedBusiness, error: businessError } = await supabaseAdminClient
+        .from(businessUpdate.table)
+        .update(businessUpdate.row)
+        .eq('id', businessUpdate.id)
+        .select('id')
+      throwIfError(businessError)
+      if (!updatedBusiness || updatedBusiness.length === 0) {
+        const { error: insertBusinessError } = await supabaseAdminClient
+          .from(businessUpdate.table)
+          .insert(businessUpdate.fullRow)
+        throwIfError(insertBusinessError)
+      }
+    }
+
     const { error } = await supabaseAdminClient
       .from('app_records')
       .update({ payload, updated_at: new Date().toISOString() })
@@ -337,7 +453,15 @@ dataRouter.post('/program', async (req, res, next) => {
       .select('id, name, cycle, goal_q')
       .single()
     throwIfError(error)
-    res.json({ ok: true, program: data ? { id: data.id, name: data.name, cycle: data.cycle, goalQ: Number(data.goal_q || 0) } : null })
+    if (data) {
+      await logProgramChange({
+        rowId: data.id,
+        action: 'CREATED',
+        changedBy: req.auth.user.id,
+        afterData: { id: data.id, name: data.name, cycle: data.cycle, goalQ: Number(data.goal_q || 0) },
+      })
+    }
+    res.json({ ok: true, program: data ? { id: data.id, name: data.name, cycle: data.cycle, goalQ: Number(data.goal_q || 0), changeHistory: [] } : null })
   } catch (err) {
     next(err)
   }
@@ -350,11 +474,25 @@ dataRouter.patch('/program/:id', async (req, res, next) => {
     const parsed = programSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: 'invalid_payload' })
     const { name, cycle, goalQ } = parsed.data
+    const { data: currentProgram, error: currentProgramError } = await supabaseAdminClient
+      .from('executive_programs')
+      .select('id, name, cycle, goal_q')
+      .eq('id', id)
+      .maybeSingle()
+    throwIfError(currentProgramError)
+    if (!currentProgram) return res.status(404).json({ error: 'program_not_found' })
     const { error } = await supabaseAdminClient
       .from('executive_programs')
       .update({ name, cycle, goal_q: Number(goalQ || 0), updated_at: new Date().toISOString() })
       .eq('id', id)
     throwIfError(error)
+    await logProgramChange({
+      rowId: id,
+      action: 'UPDATED',
+      changedBy: req.auth.user.id,
+      beforeData: { id: currentProgram.id, name: currentProgram.name, cycle: currentProgram.cycle, goalQ: Number(currentProgram.goal_q || 0) },
+      afterData: { id, name, cycle, goalQ: Number(goalQ || 0) },
+    })
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -365,11 +503,37 @@ dataRouter.delete('/program/:id', async (req, res, next) => {
   try {
     if (!isMaster(req.auth.profile)) return res.status(403).json({ error: 'forbidden' })
     const { id } = req.params
+    const { data: currentProgram, error: currentProgramError } = await supabaseAdminClient
+      .from('executive_programs')
+      .select('id, name, cycle, goal_q, is_active')
+      .eq('id', id)
+      .maybeSingle()
+    throwIfError(currentProgramError)
+    if (!currentProgram) return res.status(404).json({ error: 'program_not_found' })
     const { error } = await supabaseAdminClient
       .from('executive_programs')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', id)
     throwIfError(error)
+    await logProgramChange({
+      rowId: id,
+      action: 'DEACTIVATED',
+      changedBy: req.auth.user.id,
+      beforeData: {
+        id: currentProgram.id,
+        name: currentProgram.name,
+        cycle: currentProgram.cycle,
+        goalQ: Number(currentProgram.goal_q || 0),
+        isActive: Boolean(currentProgram.is_active),
+      },
+      afterData: {
+        id: currentProgram.id,
+        name: currentProgram.name,
+        cycle: currentProgram.cycle,
+        goalQ: Number(currentProgram.goal_q || 0),
+        isActive: false,
+      },
+    })
     res.json({ ok: true })
   } catch (err) {
     next(err)

@@ -259,12 +259,32 @@ select:focus {
 
 .primary-btn,
 .ghost-btn,
-.danger-btn {
+.danger-btn,
+.excel-btn {
   border: 0;
   border-radius: 10px;
   padding: 10px 14px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.excel-btn {
+  border-radius: 999px;
+  padding: 10px 16px;
+  color: #ffffff;
+  background: linear-gradient(135deg, #0a8f4c 0%, #0b7d44 48%, #066233 100%);
+  box-shadow: 0 10px 20px rgba(11, 125, 68, 0.24);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.excel-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(11, 125, 68, 0.3);
+  filter: brightness(1.03);
+}
+
+.excel-btn:active {
+  transform: translateY(0);
 }
 
 .primary-btn {
@@ -399,6 +419,40 @@ th {
   background: #e8f4eb;
 }
 
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.status-success {
+  color: #0b7d44;
+  background: #e8f6ee;
+  border-color: #b8dec7;
+}
+
+.status-warn {
+  color: #8a5a00;
+  background: #fff7df;
+  border-color: #f0d58c;
+}
+
+.status-danger {
+  color: #b42318;
+  background: #fdecec;
+  border-color: #f6c4c4;
+}
+
+.status-neutral {
+  color: #355147;
+  background: #eef3ef;
+  border-color: #c9d6cc;
+}
+
 .record-viewer {
   margin-top: 14px;
   border: 1px solid #c9d9cc;
@@ -482,6 +536,23 @@ th {
 .history-item ul {
   margin: 0;
   padding-left: 18px;
+}
+
+.comment-box {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.comment-box textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid #b4c7b9;
+  background: #fff;
+  padding: 10px;
+  font: inherit;
+  resize: vertical;
 }
 
 .login-screen {
