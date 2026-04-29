@@ -2554,15 +2554,17 @@ function App() {
               </select>
             </label>
           ) : null}
-          <button
-            type="button"
-            className="excel-btn"
-            onClick={handleExportExcel}
-            disabled={!datasetHydrated}
-            title="Descargar datos en Excel"
-          >
-            Descargar Excel
-          </button>
+          {isMaster ? (
+            <button
+              type="button"
+              className="excel-btn"
+              onClick={handleExportExcel}
+              disabled={!datasetHydrated}
+              title="Descargar datos en Excel"
+            >
+              Descargar Excel
+            </button>
+          ) : null}
           <button type="button" className="ghost-btn" onClick={() => setView('dashboard')}>Dashboard</button>
           {isMaster ? <button type="button" className="ghost-btn" onClick={() => setView('metas')}>Metas</button> : null}
           <button type="button" className="ghost-btn" onClick={() => setView('ingreso')}>Ingreso datos</button>
