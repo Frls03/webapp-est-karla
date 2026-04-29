@@ -17,7 +17,15 @@ import {
 import './App.css'
 
 const AUTH_KEY = 'ventas_app_auth_v2'
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://capi.nexlum.site').replace(/\/$/, '')
+function resolveApiBaseUrl(rawValue) {
+  const input = String(rawValue || '').trim()
+  if (!input) return import.meta.env.DEV ? '' : 'https://capi.nexlum.site'
+  if (input.startsWith('/')) return input.replace(/\/$/, '')
+  if (/^https?:\/\//i.test(input)) return input.replace(/\/$/, '')
+  return `https://${input}`.replace(/\/$/, '')
+}
+
+const API_BASE_URL = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
 const MONTHS = [
   'enero',
   'febrero',
