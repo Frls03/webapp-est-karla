@@ -3106,7 +3106,7 @@ function App() {
                 </div>
               </article>
 
-              {activeArea === 'ejecutivo' ? (
+              {activeArea === 'ejecutivo' && isMaster ? (
             <article className="panel-card full section-block">
               <h2>Programas y metas (gerencia)</h2>
               <div className="table-wrap">
