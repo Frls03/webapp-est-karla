@@ -112,6 +112,11 @@ const AREA_CONFIG = {
   },
 }
 
+function normalizeArea(area) {
+  const normalized = String(area || '').trim().toLowerCase()
+  return Object.prototype.hasOwnProperty.call(AREA_CONFIG, normalized) ? normalized : null
+}
+
 function buildPerSellerGoals(defaults, sellers) {
   return sellers.reduce((acc, seller) => {
     acc[seller] = { ...defaults }
@@ -664,6 +669,13 @@ async function apiRequest(path, { method = 'GET', token, body } = {}) {
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
+    const authExpired =
+      response.status === 401 ||
+      data?.error === 'invalid_token' ||
+      String(data?.message || '').toLowerCase().includes('invalid_token')
+    if (authExpired && token && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth-expired'))
+    }
     const error = new Error(data?.message || data?.error || `Request failed (${response.status})`)
     error.status = response.status
     error.code = data?.error || null
@@ -1013,6 +1025,27 @@ function App() {
   }, [isMaster, view])
 
   useEffect(() => {
+    function handleAuthExpired() {
+      setAuth(null)
+      setDatasetHydrated(false)
+      sessionStorage.removeItem(AUTH_KEY)
+      setFlashMessage('Sesion expirada. Inicia sesion nuevamente.')
+      setView('dashboard')
+    }
+    window.addEventListener('auth-expired', handleAuthExpired)
+    return () => window.removeEventListener('auth-expired', handleAuthExpired)
+  }, [])
+
+  useEffect(() => {
+    if (auth?.role !== 'advisor') return
+    const advisorArea = normalizeArea(auth?.area)
+    if (!advisorArea) return
+    if (activeArea !== advisorArea) {
+      setActiveArea(advisorArea)
+    }
+  }, [auth?.role, auth?.area, activeArea])
+
+  useEffect(() => {
     if (!visibleCriteria.includes(activeCriterion)) {
       updateCriterion(activeArea, visibleCriteria[0] || AREA_CONFIG[activeArea].criteria[0])
     }
@@ -1114,19 +1147,20 @@ function App() {
       if (!token) throw new Error('invalid_credentials')
       const me = await apiRequest('/api/auth/me', { token })
       const profile = me?.profile
+      const normalizedArea = normalizeArea(profile?.area)
       const session = {
         email: me?.user?.email || email,
         role: profile?.role || 'advisor',
         name: profile?.display_name || me?.user?.email || 'Usuario',
-        area: profile?.area || null,
+        area: normalizedArea,
         seller: profile?.seller_name || null,
         accessToken: token,
       }
       setAuth(session)
       sessionStorage.setItem(AUTH_KEY, JSON.stringify(session))
-      if (session.role === 'advisor' && session.area) {
-        setActiveArea(session.area)
-        setSelectedSellerByArea((prev) => ({ ...prev, [session.area]: session.seller }))
+      if (session.role === 'advisor' && normalizedArea) {
+        setActiveArea(normalizedArea)
+        setSelectedSellerByArea((prev) => ({ ...prev, [normalizedArea]: session.seller }))
       }
     } catch (err) {
       setLoginError(getFriendlyLoginError(err))
@@ -1161,7 +1195,7 @@ function App() {
     if (!isMaster) {
       const restricted = getRestrictedAdvisorCriteria(area)
       if (restricted.has(value)) {
-        setFlashMessage('Este criterio no estÃ¡ disponible para asesores')
+        setFlashMessage('Este criterio no está disponible para asesores')
         return
       }
     }
@@ -1398,7 +1432,7 @@ function App() {
       setFlashMessage('Solo gerencia puede eliminar registros')
       return
     }
-    askConfirmation('¿Seguro de eliminar este dato?', () => {
+    askConfirmation('¿Quieres eliminar este dato?', () => {
       setDataset((prev) => ({
         ...prev,
         [area]: {
@@ -1443,7 +1477,7 @@ function App() {
     const { area, criterion, id } = recordViewer
     const sourceRow = dataset[area]?.[criterion]?.find((row) => row.id === id)
     if (!sourceRow) {
-      setFlashMessage('No se encontro el registro para actualizar')
+      setFlashMessage('No se encontró el registro para actualizar')
       return
     }
     if (!canEditRecord(area, criterion, sourceRow)) {
@@ -1509,7 +1543,7 @@ function App() {
           body: { area, criterion, record: normalized },
         }).catch((err) => {
           console.error(err)
-          setFlashMessage('No se pudo guardar la edicion en servidor')
+          setFlashMessage('No se pudo guardar la edición en servidor')
         })
       }
 
@@ -1541,7 +1575,7 @@ function App() {
     if (!isMaster) {
       const restricted = getRestrictedAdvisorCriteria(activeArea)
       if (restricted.has(activeCriterion)) {
-        setFlashMessage('Este criterio no estÃ¡ disponible para asesores')
+        setFlashMessage('Este criterio no está disponible para asesores')
         return
       }
     }
@@ -1750,7 +1784,7 @@ function App() {
       }
       if (activeCriterion === 'facturacion') {
         if (!isMaster) {
-          setFlashMessage('La facturacion solo puede llenarla gerencia')
+          setFlashMessage('La facturación solo puede llenarla gerencia')
           return
         }
         if (
@@ -1815,7 +1849,7 @@ function App() {
       }
       if (activeCriterion === 'facturacion') {
         if (!isMaster) {
-          setFlashMessage('La facturacion solo puede llenarla gerencia')
+          setFlashMessage('La facturación solo puede llenarla gerencia')
           return
         }
         if (
@@ -3352,7 +3386,7 @@ function App() {
                   )}
                 </div>
 
-                <h4>Histórico de cambios</h4>
+                <h4>Historial de cambios</h4>
                 <div className="history-list">
                   {(selectedRecord.changeHistory || []).length === 0 ? (
                     <p>Sin cambios registrados.</p>
@@ -3430,7 +3464,7 @@ function App() {
               </button>
             </div>
 
-            <h4>Histórico de cambios</h4>
+            <h4>Historial de cambios</h4>
             <div className="history-list">
               {(programEditor.history || []).length === 0 ? (
                 <p>Sin cambios registrados.</p>
