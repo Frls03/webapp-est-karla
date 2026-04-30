@@ -123,7 +123,7 @@ function buildBusinessMutation(area, criterion, record, userId) {
   const base = { month, year, seller_name: seller, created_by: userId, updated_by: userId }
 
   const map = {
-    'superior:leads': { table: 'superior_leads', row: { ...base, nombre: record.nombre || '', carrera: record.carrera || '', estado: record.estado || '', venta_q: Number(record.ventaQ || 0) } },
+    'superior:leads': { table: 'superior_leads', row: { ...base, nombre: record.nombre || '', carrera: record.carrera || '', estado: record.estado || '', venta_q: Number((record.ventaAnualQ ?? record.ventaQ) || 0) } },
     'superior:alianzas': { table: 'superior_alianzas', row: { ...base, empresa: record.empresa || '', estatus: record.estatus || '', fecha_escritorio: record.fechaEscritorio || null } },
     'superior:contactabilidad': { table: 'superior_contactabilidad', row: { ...base, contactados: Number(record.contactados || 0) } },
     'superior:resumen': {
@@ -251,12 +251,15 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
     julio: 0, agosto: 0, septiembre: 0, octubre: 0, noviembre: 0, diciembre: 0,
   }
   const goals = {
-    superior: { bySeller: {} },
+    superior: { bySeller: {}, salesMonthlyBySeller: {} },
     ejecutivo: { bySeller: {}, salesMonthlyBySeller: {} },
     incompany: { citasMonthly: 0, salesAnnualBySeller: {}, salesMonthlyBySeller: {} },
   }
 
-  for (const seller of sellersByArea.superior || []) goals.superior.bySeller[seller] = { ventasMonthly: 0, contactabilidadMonthly: 0, alianzasMonthly: 0, citasMonthly: 0 }
+  for (const seller of sellersByArea.superior || []) {
+    goals.superior.bySeller[seller] = { ventasMonthly: 0, contactabilidadMonthly: 0, alianzasMonthly: 0, citasMonthly: 0 }
+    goals.superior.salesMonthlyBySeller[seller] = { ...monthlyZeros }
+  }
   for (const seller of sellersByArea.ejecutivo || []) {
     goals.ejecutivo.bySeller[seller] = { llamadasMonthly: 0, datosActualizadosMonthly: 0, clientesNuevosMonthly: 0 }
     goals.ejecutivo.salesMonthlyBySeller[seller] = { ...monthlyZeros }
@@ -275,6 +278,7 @@ function buildGoalsSnapshot(goalRows, sellersByArea) {
     const monthName = row.month ? numToMonth[row.month] : null
 
     if (area === 'superior' && seller && goals.superior.bySeller[seller] && criterion in goals.superior.bySeller[seller]) goals.superior.bySeller[seller][criterion] = value
+    if (area === 'superior' && criterion === 'salesMonthly' && seller && monthName && goals.superior.salesMonthlyBySeller[seller]) goals.superior.salesMonthlyBySeller[seller][monthName] = value
     if (area === 'ejecutivo' && seller && goals.ejecutivo.bySeller[seller] && criterion in goals.ejecutivo.bySeller[seller]) goals.ejecutivo.bySeller[seller][criterion] = value
     if (area === 'ejecutivo' && criterion === 'salesMonthly' && seller && monthName && goals.ejecutivo.salesMonthlyBySeller[seller]) goals.ejecutivo.salesMonthlyBySeller[seller][monthName] = value
     if (area === 'incompany' && criterion === 'citasMonthly') goals.incompany.citasMonthly = value
@@ -291,7 +295,8 @@ dataRouter.get('/bootstrap', async (req, res, next) => {
 
     let sellersQuery = supabaseAdminClient.from('sellers').select('area, name').eq('is_active', true).order('area').order('name')
     let recordsQuery = supabaseAdminClient.from('app_records').select('id, area, criterion, payload, created_at, updated_at').order('created_at', { ascending: true })
-    let goalsQuery = supabaseAdminClient.from('area_goals').select('area, seller_name, criterion, month, value')
+    const currentYear = new Date().getFullYear()
+    let goalsQuery = supabaseAdminClient.from('area_goals').select('area, seller_name, criterion, month, value').eq('year', currentYear)
 
     if (advisorMode) {
       sellersQuery = sellersQuery.eq('area', profile.area).eq('name', profile.seller_name)

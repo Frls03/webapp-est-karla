@@ -37,6 +37,22 @@
   gap: 6px;
   color: #355147;
   font-size: 14px;
+  min-width: 130px;
+}
+
+.top-actions label select {
+  min-width: 130px;
+}
+
+.top-actions .program-filter {
+  min-width: 130px;
+  width: 130px;
+}
+
+.top-actions .program-filter select {
+  width: 100%;
+  max-width: 100%;
+  text-overflow: ellipsis;
 }
 
 .area-switch {

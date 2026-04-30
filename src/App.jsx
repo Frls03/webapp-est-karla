@@ -143,6 +143,7 @@ const EXEC_STATUS = [
 ]
 const SUPERIOR_LEAD_STATUS = ['No participará', 'Presentación', 'Seguimiento', 'Venta', 'Cancelada']
 const SUPERIOR_ALIANZA_STATUS = ['Cita', 'En proceso', 'Renovada', 'Escritorio informativo']
+const SUPERIOR_CAREER_OPTIONS = ['BADO', 'BMI', 'BAS', 'MGP', 'MLT', 'MIA', 'MBA']
 const INC_PROPOSAL_STATUS = [
   'Solicitud de propuesta',
   'Envío de propuesta',
@@ -216,6 +217,36 @@ function getPeriodMetaLabel(periodType) {
   return PERIOD_META_LABELS[periodType] || 'mensual'
 }
 
+function monthIndex(month) {
+  return MONTHS.indexOf(String(month || '').toLowerCase())
+}
+
+function recognizedIncomeForLeadInMonth(lead, month) {
+  const start = monthIndex(lead.month)
+  const current = monthIndex(month)
+  const durationMonths = Math.max(1, Math.round(toNumber(lead.durationMonths || 12)))
+  const matriculaQ = toNumber(lead.matriculaQ || 0)
+  const mensualidadQ = toNumber(lead.mensualidadQ || lead.ventaMensualQ || 0)
+  if (start < 0 || current < 0) return 0
+  const elapsed = current - start
+  if (elapsed < 0 || elapsed >= durationMonths) return 0
+  return round2(mensualidadQ + (elapsed === 0 ? matriculaQ : 0))
+}
+
+function totalContractForLead(lead) {
+  const durationMonths = Math.max(1, Math.round(toNumber(lead.durationMonths || 12)))
+  const matriculaQ = toNumber(lead.matriculaQ || 0)
+  const mensualidadQ = toNumber(lead.mensualidadQ || lead.ventaMensualQ || 0)
+  const total = matriculaQ + mensualidadQ * durationMonths
+  return round2(total || toNumber(lead.ventaAnualQ ?? lead.ventaQ))
+}
+
+function truncateLabel(text, maxLength = 58) {
+  const value = String(text || '')
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`
+}
+
 
 function getRestrictedAdvisorCriteria(area) {
   if (area === 'ejecutivo') {
@@ -267,6 +298,7 @@ function buildAnnualDemoData(includeDemo = false) {
           { ventasMonthly: 0, contactabilidadMonthly: 0, alianzasMonthly: 0, citasMonthly: 0 },
           AREA_CONFIG.superior.sellers,
         ),
+        salesMonthlyBySeller: {},
       },
       ejecutivo: {
         bySeller: buildPerSellerGoals(
@@ -290,6 +322,9 @@ function buildAnnualDemoData(includeDemo = false) {
   AREA_CONFIG.incompany.sellers.forEach((seller) => {
     const annual = data.goals.incompany.salesAnnualBySeller[seller] || 0
     data.goals.incompany.salesMonthlyBySeller[seller] = buildMonthlyGoalsFromAnnual(annual, monthlyWeights)
+  })
+  AREA_CONFIG.superior.sellers.forEach((seller) => {
+    data.goals.superior.salesMonthlyBySeller[seller] = buildMonthlyGoalsFromAnnual(0, monthlyWeights)
   })
   AREA_CONFIG.ejecutivo.sellers.forEach((seller) => {
     data.goals.ejecutivo.salesMonthlyBySeller[seller] = buildMonthlyGoalsFromAnnual(0, monthlyWeights)
@@ -337,7 +372,11 @@ function buildAnnualDemoData(includeDemo = false) {
         nombre: ['Byron', 'Lucia', 'Genesis', 'Kevin'][seed % 4],
         carrera: ['BADO', 'BMI', 'MIA', 'MBA'][seed % 4],
         estado: ['Presentacion', 'Seguimiento', 'Venta', 'No participara'][seed % 4],
-        ventaQ: seed % 4 === 2 ? round2((6500 + (seed % 3000)) * factor) : 0,
+        durationMonths: seed % 2 === 0 ? 24 : 12,
+        matriculaQ: seed % 4 === 2 ? 1250 : 0,
+        mensualidadQ: seed % 4 === 2 ? round2((700 + (seed % 250)) * factor) : 0,
+        ventaAnualQ: 0,
+        ventaMensualQ: 0,
       })
 
       const metas = {
@@ -496,7 +535,18 @@ function buildAnnualDemoData(includeDemo = false) {
 
 const INITIAL_FORMS = {
   superior: {
-    leads: { month: 'enero', seller: '', nombre: '', carrera: '', estado: SUPERIOR_LEAD_STATUS[0], ventaQ: '' },
+    leads: {
+      month: 'enero',
+      seller: '',
+      nombre: '',
+      carrera: SUPERIOR_CAREER_OPTIONS[0],
+      estado: SUPERIOR_LEAD_STATUS[0],
+      durationMonths: 12,
+      matriculaQ: '',
+      mensualidadQ: '',
+      ventaAnualQ: '',
+      ventaMensualQ: '',
+    },
     alianzas: { month: 'enero', seller: '', empresa: '', estatus: SUPERIOR_ALIANZA_STATUS[0], fechaEscritorio: '' },
     contactabilidad: { month: 'enero', seller: '', contactados: '' },
     metas: {
@@ -658,6 +708,10 @@ function mergeWithDefaults(remoteDataset) {
         bySeller: {
           ...defaults.goals.superior.bySeller,
           ...remoteDataset.goals?.superior?.bySeller,
+        },
+        salesMonthlyBySeller: {
+          ...defaults.goals.superior.salesMonthlyBySeller,
+          ...remoteDataset.goals?.superior?.salesMonthlyBySeller,
         },
       },
       ejecutivo: {
@@ -1164,6 +1218,30 @@ function App() {
     persistGoal({ area, criterion: key, seller, month: null, value: numeric, periodType: 'mensual' })
   }
 
+  function updateSuperiorGoalMonthly(seller, month, value) {
+    if (!isMaster) {
+      return
+    }
+    const numeric = toNumber(value)
+    setDataset((prev) => ({
+      ...prev,
+      goals: {
+        ...prev.goals,
+        superior: {
+          ...prev.goals.superior,
+          salesMonthlyBySeller: {
+            ...prev.goals.superior.salesMonthlyBySeller,
+            [seller]: {
+              ...(prev.goals.superior.salesMonthlyBySeller?.[seller] || {}),
+              [month]: numeric,
+            },
+          },
+        },
+      },
+    }))
+    persistGoal({ area: 'superior', criterion: 'salesMonthly', seller, month: MONTHS.indexOf(month) + 1, value: numeric, periodType: 'mensual' })
+  }
+
   function updateIncompanyGoalAnnual(seller, value) {
     if (!isMaster) {
       return
@@ -1503,14 +1581,29 @@ function App() {
         if (!requireText(current.nombre, 'Nombre') || !requireText(current.carrera, 'Carrera') || !requireText(current.estado, 'Estado')) {
           return
         }
+        const selectedCareer = String(current.carrera || '').trim().toUpperCase()
+        if (!SUPERIOR_CAREER_OPTIONS.includes(selectedCareer)) {
+          setFlashMessage('Carrera no válida')
+          return
+        }
+        const durationMonths = Math.max(1, Math.round(toNumber(current.durationMonths || 12)))
+        const matriculaQ = Math.max(toNumber(current.matriculaQ), 0)
+        const mensualidadQ = Math.max(toNumber(current.mensualidadQ || current.ventaMensualQ), 0)
+        const ventaAnualQ = round2(matriculaQ + mensualidadQ * durationMonths)
+        const ventaMensualQ = mensualidadQ
         saveRecord('superior', 'leads', {
           id: crypto.randomUUID(),
           month,
           seller: finalSeller,
           nombre: sanitizeText(current.nombre, 80),
-          carrera: sanitizeText(current.carrera, 60),
+          carrera: selectedCareer,
           estado: sanitizeText(current.estado, 80),
-          ventaQ: toNumber(current.ventaQ),
+          durationMonths,
+          matriculaQ,
+          mensualidadQ,
+          ventaAnualQ,
+          ventaMensualQ,
+          ventaQ: ventaAnualQ,
         })
       } else if (activeCriterion === 'alianzas') {
         if (!requireText(current.empresa, 'Empresa') || !requireText(current.estatus, 'Estatus') || !requireText(current.fechaEscritorio, 'Fecha de escritorio')) {
@@ -1976,10 +2069,21 @@ function App() {
     if (activeArea === 'superior') {
       const selected = effectiveSeller === 'todas' ? getAreaSellers('superior') : [effectiveSeller]
       const sumGoal = (key) =>
-        selected.reduce((acc, seller) => acc + (dataset.goals.superior.bySeller?.[seller]?.[key] || 0), 0) *
-        periodMonths.length
+        selected.reduce((acc, seller) => acc + (dataset.goals.superior.bySeller?.[seller]?.[key] || 0), 0) * periodMonths.length
+      const superiorSalesGoal = selected.reduce(
+        (acc, seller) =>
+          acc +
+          periodMonths.reduce(
+            (monthAcc, month) =>
+              monthAcc +
+              ((dataset.goals.superior.salesMonthlyBySeller?.[seller]?.[month] ??
+                dataset.goals.superior.bySeller?.[seller]?.ventasMonthly) || 0),
+            0,
+          ),
+        0,
+      )
       return [
-        { label: `Meta ventas ${periodMetaLabel}`, value: asNAWhenZero(sumGoal('ventasMonthly'), formatCurrency) },
+        { label: `Meta ventas ${periodMetaLabel}`, value: asNAWhenZero(superiorSalesGoal, formatCurrency) },
         { label: `Meta contactabilidad ${periodMetaLabel}`, value: asNAWhenZero(sumGoal('contactabilidadMonthly'), (v) => formatNumber(v, 0)) },
         { label: `Meta alianzas ${periodMetaLabel}`, value: asNAWhenZero(sumGoal('alianzasMonthly'), (v) => formatNumber(v, 0)) },
         { label: `Meta citas ${periodMetaLabel}`, value: asNAWhenZero(sumGoal('citasMonthly'), (v) => formatNumber(v, 0)) },
@@ -2025,9 +2129,22 @@ function App() {
 
   const dashboardData = useMemo(() => {
     if (activeArea === 'superior') {
-      const totalSales = superiorFiltered.resumen.reduce((acc, row) => acc + row.venta, 0)
-      const totalMeta = superiorFiltered.metas.reduce((acc, row) => acc + row.total, 0)
-      const totalCumpl = superiorFiltered.cumplimiento.reduce((acc, row) => acc + row.total, 0)
+      const selectedSellers = effectiveSeller === 'todas' ? getAreaSellers('superior') : [effectiveSeller]
+      const superiorLeadsBySellerAllMonths = filterRecords(dataset.superior.leads, MONTHS, effectiveSeller)
+      const superiorGoalForSellerByPeriod = (seller) =>
+        periodMonths.reduce(
+          (acc, month) =>
+            acc +
+            ((dataset.goals.superior.salesMonthlyBySeller?.[seller]?.[month] ??
+              dataset.goals.superior.bySeller?.[seller]?.ventasMonthly) || 0),
+          0,
+        )
+      const totalSales = superiorLeadsBySellerAllMonths.reduce(
+        (acc, row) => acc + periodMonths.reduce((periodAcc, month) => periodAcc + recognizedIncomeForLeadInMonth(row, month), 0),
+        0,
+      )
+      const totalMeta = selectedSellers.reduce((acc, seller) => acc + superiorGoalForSellerByPeriod(seller), 0)
+      const totalGap = totalSales - totalMeta
       const proposalStatusRaw = superiorFiltered.leads.reduce(
         (acc, row) => {
           const key = statusFromSuperiorLead(row.estado)
@@ -2036,28 +2153,52 @@ function App() {
         },
         { Cerradas: 0, Abiertas: 0, Canceladas: 0 },
       )
-      const salesByProduct = PROGRAM_KEYS.map((key) => {
-        const total = superiorFiltered.cumplimiento.reduce((acc, row) => acc + (row[key] || 0), 0)
-        return { name: key.toUpperCase(), value: total }
-      }).sort((a, b) => b.value - a.value)
-      const topProducts = salesByProduct.slice(0, 3)
-      const productAmountCards = salesByProduct.map((item) => ({
+      const salesByCareerMap = superiorLeadsBySellerAllMonths.reduce((map, row) => {
+        const career = String(row.carrera || '').trim().toUpperCase()
+        if (!SUPERIOR_CAREER_OPTIONS.includes(career)) {
+          return map
+        }
+        const periodIncome = periodMonths.reduce((acc, month) => acc + recognizedIncomeForLeadInMonth(row, month), 0)
+        map.set(career, (map.get(career) || 0) + periodIncome)
+        return map
+      }, new Map())
+      const salesByCareer = SUPERIOR_CAREER_OPTIONS.map((career) => ({
+        name: career,
+        value: round2(salesByCareerMap.get(career) || 0),
+      })).sort((a, b) => b.value - a.value)
+      const totalAnnualFromLeads = superiorFiltered.leads.reduce(
+        (acc, row) => acc + totalContractForLead(row),
+        0,
+      )
+      const totalMonthlyFromLeads = superiorLeadsBySellerAllMonths.reduce((acc, row) => acc + recognizedIncomeForLeadInMonth(row, activeMonth), 0)
+      const topCareers = salesByCareer.slice(0, 3)
+      const careerAmountCards = salesByCareer.map((item) => ({
         title: item.name,
         value: formatCurrency(item.value),
-        subtitle: 'Venta por producto',
+        subtitle: 'Ingreso mensual por carrera',
         highlight: false,
       }))
 
       const salesTrend = periodMonths.map((month) => {
-        const monthSales = filterRecords(dataset.superior.resumen, [month], effectiveSeller).reduce(
-          (acc, row) => acc + row.venta,
+        const monthSales = superiorLeadsBySellerAllMonths.reduce(
+          (acc, row) => acc + recognizedIncomeForLeadInMonth(row, month),
           0,
         )
-        return { month, venta: monthSales }
+        const monthGoal = selectedSellers.reduce(
+          (acc, seller) =>
+            acc +
+            ((dataset.goals.superior.salesMonthlyBySeller?.[seller]?.[month] ??
+              dataset.goals.superior.bySeller?.[seller]?.ventasMonthly) || 0),
+          0,
+        )
+        return { month, venta: monthSales, meta: monthGoal, diferencia: round2(monthSales - monthGoal) }
       })
 
       const contactTotal = superiorFiltered.contactabilidad.reduce((acc, row) => acc + row.contactados, 0)
-      const contactGoal = Math.max(superiorFiltered.resumen.length, 1) * 220
+      const contactGoal = selectedSellers.reduce(
+        (acc, seller) => acc + ((dataset.goals.superior.bySeller?.[seller]?.contactabilidadMonthly || 0) * periodMonths.length),
+        0,
+      )
       const contactPie = [
         { name: 'Contactados', value: contactTotal },
         { name: 'Pendiente', value: Math.max(contactGoal - contactTotal, 0) },
@@ -2119,8 +2260,8 @@ function App() {
         }, new Map()),
       ).map(([seller, row]) => ({ seller, ...row }))
 
-      const metaBySeller = superiorFiltered.metas.reduce((map, row) => {
-        map.set(row.seller, (map.get(row.seller) || 0) + row.total)
+      const metaBySeller = selectedSellers.reduce((map, seller) => {
+        map.set(seller, superiorGoalForSellerByPeriod(seller))
         return map
       }, new Map())
 
@@ -2139,17 +2280,21 @@ function App() {
       return {
         cards: [
           { title: 'Ventas totales', value: formatCurrency(totalSales), subtitle: 'Resumen filtrado', highlight: true },
+          { title: 'Venta anual (leads)', value: formatCurrency(totalAnnualFromLeads), subtitle: 'Suma de leads del periodo', highlight: false },
+          { title: 'Ingreso mensual (leads)', value: formatCurrency(totalMonthlyFromLeads), subtitle: `Solo ${activeMonth}`, highlight: false },
+          { title: 'Brecha vs meta', value: formatCurrency(totalGap), subtitle: `${totalGap >= 0 ? 'Sobre' : 'Bajo'} meta ${periodMetaLabel}`, highlight: false },
           { title: 'Estatus propuestas', value: `C:${proposalStatusRaw.Cerradas} A:${proposalStatusRaw.Abiertas} X:${proposalStatusRaw.Canceladas}`, subtitle: 'Cerradas / Abiertas / Canceladas', highlight: false },
-          { title: 'Top 3 productos', value: topProducts.map((item) => item.name).join(', ') || 'Sin datos', subtitle: 'Por venta en Q', highlight: false },
-          { title: 'Cumplimiento', value: `${formatNumber(totalMeta > 0 ? (totalCumpl / totalMeta) * 100 : 0, 2)}%`, subtitle: `Sobre meta ${periodMetaLabel} gerencial`, highlight: false },
-          ...productAmountCards,
+          { title: 'Top 3 carreras', value: topCareers.map((item) => item.name).join(', ') || 'Sin datos', subtitle: 'Por ingreso mensual Q', highlight: false },
+          { title: 'Cumplimiento', value: `${formatNumber(totalMeta > 0 ? (totalSales / totalMeta) * 100 : 0, 2)}%`, subtitle: `Sobre meta ${periodMetaLabel} gerencial`, highlight: false },
+          ...careerAmountCards,
         ],
         charts: [
-          { key: 'trend', title: 'Tendencia de ventas', type: 'line', data: salesTrend, x: 'month', y: 'venta', formatter: formatCurrency, color: CHART_COLORS.secondary, wide: true },
+          { key: 'trend', title: 'Tendencia ventas vs meta', type: 'bar-group', data: salesTrend, x: 'month', y: 'venta', y2: 'meta', formatter: formatCurrency, color: CHART_COLORS.secondary, color2: CHART_COLORS.primary, wide: true },
+          { key: 'gap', title: 'Diferencia por mes (venta-meta)', type: 'bar', data: salesTrend, x: 'month', y: 'diferencia', formatter: formatCurrency, color: CHART_COLORS.accent, wide: true },
           { key: 'contact', title: 'Contactabilidad', type: 'pie', data: contactPie, x: 'name', y: 'value', formatter: (v) => formatNumber(v, 0) },
           { key: 'prop-vs-close', title: 'Propuestas entregadas vs cerradas', type: 'bar-group', data: propuestasVsCerradas, x: 'seller', y: 'entregadas', y2: 'cerradas', color: CHART_COLORS.accent, color2: CHART_COLORS.primary, formatter: (v) => formatNumber(v, 0) },
           { key: 'alianzas', title: 'Alianzas', type: 'hbar', data: alianzasChart, x: 'empresa', y: 'total', color: CHART_COLORS.secondary, formatter: (v) => formatNumber(v, 0), wide: true },
-          { key: 'product-sales', title: 'Ventas por producto', type: 'pie', data: salesByProduct, x: 'name', y: 'value', formatter: formatCurrency, pieLabelNameOnly: true },
+          { key: 'career-sales', title: 'Ingreso mensual por carrera', type: 'pie', data: salesByCareer, x: 'name', y: 'value', formatter: formatCurrency, pieLabelNameOnly: true },
           { key: 'citas', title: 'Citas realizadas', type: 'bar', data: citasBySeller, x: 'seller', y: 'citas', color: CHART_COLORS.accent, formatter: (v) => formatNumber(v, 0) },
           { key: 'compliance-ind', title: 'Cumplimiento de indicadores', type: 'bar', data: complianceIndicators, x: 'seller', y: 'score', color: CHART_COLORS.primary, formatter: (v) => `${formatNumber(v, 2)}%`, full: true },
         ],
@@ -2542,13 +2687,13 @@ function App() {
             </label>
           ) : null}
           {activeArea === 'ejecutivo' ? (
-            <label>
+            <label className="program-filter">
               Programa
               <select value={selectedExecutiveProgram} onChange={(event) => setSelectedExecutiveProgram(event.target.value)}>
                 <option value="todos">Todos</option>
                 {executivePrograms.map((program) => (
-                  <option key={program.id} value={program.id}>
-                    {program.name}
+                  <option key={program.id} value={program.id} title={program.name}>
+                    {truncateLabel(program.name, 68)}
                   </option>
                 ))}
               </select>
@@ -2704,7 +2849,17 @@ function App() {
                   </div>
                   <form className="manual-form form-5">
                   <label>
-                    Ventas mensuales
+                    Meta anual ventas ({goalSellerByArea.superior})
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={round2(MONTHS.reduce((acc, month) => acc + (dataset.goals.superior.salesMonthlyBySeller?.[goalSellerByArea.superior]?.[month] || 0), 0))}
+                      disabled
+                    />
+                  </label>
+                  <label>
+                    Ventas base mensual (respaldo)
                     <input
                       type="number"
                       min="0"
@@ -2748,6 +2903,33 @@ function App() {
                     />
                   </label>
                   </form>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Mes</th>
+                          <th>Meta ventas {goalSellerByArea.superior}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {MONTHS.map((month) => (
+                          <tr key={month}>
+                            <td>{month}</td>
+                            <td>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={dataset.goals.superior.salesMonthlyBySeller?.[goalSellerByArea.superior]?.[month] || 0}
+                                onChange={(event) => updateSuperiorGoalMonthly(goalSellerByArea.superior, month, event.target.value)}
+                                disabled={!isMaster}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               ) : null}
 
@@ -3300,7 +3482,14 @@ function renderCriterionFields({ area, criterion, forms, dataset, updateForm, is
     return (
       <>
         <label>Nombre<input value={current.nombre} onChange={(event) => updateForm(area, criterion, 'nombre', event.target.value)} /></label>
-        <label>Carrera interes<input value={current.carrera} onChange={(event) => updateForm(area, criterion, 'carrera', event.target.value)} /></label>
+        <label>
+          Carrera interes
+          <select value={current.carrera} onChange={(event) => updateForm(area, criterion, 'carrera', event.target.value)}>
+            {SUPERIOR_CAREER_OPTIONS.map((career) => (
+              <option key={career} value={career}>{career}</option>
+            ))}
+          </select>
+        </label>
         <label>
           Estado
           <select value={current.estado} onChange={(event) => updateForm(area, criterion, 'estado', event.target.value)}>
@@ -3309,7 +3498,10 @@ function renderCriterionFields({ area, criterion, forms, dataset, updateForm, is
             ))}
           </select>
         </label>
-        <label>Total venta Q<input type="number" min="0" step="0.01" value={current.ventaQ} onChange={(event) => updateForm(area, criterion, 'ventaQ', event.target.value)} /></label>
+        <label>Duración (meses)<input type="number" min="1" step="1" value={current.durationMonths ?? 12} onChange={(event) => updateForm(area, criterion, 'durationMonths', event.target.value)} /></label>
+        <label>Matrícula Q<input type="number" min="0" step="0.01" value={current.matriculaQ ?? ''} onChange={(event) => updateForm(area, criterion, 'matriculaQ', event.target.value)} /></label>
+        <label>Mensualidad Q<input type="number" min="0" step="0.01" value={current.mensualidadQ ?? current.ventaMensualQ ?? ''} onChange={(event) => updateForm(area, criterion, 'mensualidadQ', event.target.value)} /></label>
+        <label>Total contrato Q<input type="number" min="0" step="0.01" value={round2(toNumber(current.matriculaQ) + toNumber(current.mensualidadQ || current.ventaMensualQ) * Math.max(1, Math.round(toNumber(current.durationMonths || 12))))} disabled /></label>
       </>
     )
   }
@@ -3556,7 +3748,10 @@ function getColumns(area, criterion) {
       { key: 'nombre', label: 'Nombre' },
       { key: 'carrera', label: 'Carrera' },
       { key: 'estado', label: 'Estado', format: (value) => renderStatusBadge(value) },
-      { key: 'ventaQ', label: 'Venta', format: (value) => formatCurrency(value) },
+      { key: 'durationMonths', label: 'Meses', format: (value) => formatNumber(value || 0, 0) },
+      { key: 'matriculaQ', label: 'Matrícula', format: (value) => formatCurrency(value || 0) },
+      { key: 'mensualidadQ', label: 'Mensualidad', format: (value, row) => formatCurrency(value || row.ventaMensualQ || 0) },
+      { key: 'ventaAnualQ', label: 'Total contrato', format: (value, row) => formatCurrency(value || totalContractForLead(row) || row.ventaQ || 0) },
     ]
   }
   if (area === 'superior' && criterion === 'alianzas') {
