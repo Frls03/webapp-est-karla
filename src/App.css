@@ -1,4 +1,4 @@
-.app-shell {
+﻿.app-shell {
   width: min(1320px, calc(100% - 32px));
   margin: 16px auto 28px;
   padding: 12px;
@@ -15,7 +15,7 @@
 
 .top-header h1 {
   margin: 0 0 6px;
-  color: #0b7d44;
+  color: #ff5c35;
   font-size: clamp(28px, 3vw, 44px);
 }
 
@@ -70,9 +70,9 @@
 }
 
 .goal-pill {
-  border: 1px solid #b8cfbf;
+  border: 1px solid #ffd3c7;
   border-radius: 10px;
-  background: #eef6f0;
+  background: #ededed;
   padding: 8px 10px;
 }
 
@@ -87,9 +87,9 @@
 }
 
 .area-pill {
-  border: 1px solid #9db7a3;
-  background: #eef5f0;
-  color: #234336;
+  border: 1px solid #ffc4b3;
+  background: #fff1eb;
+  color: #7a2f1d;
   border-radius: 999px;
   padding: 8px 14px;
   font-weight: 700;
@@ -97,9 +97,9 @@
 }
 
 .area-pill.active {
-  background: #0b7d44;
+  background: #ff5c35;
   color: #fff;
-  border-color: #0b7d44;
+  border-color: #ff5c35;
 }
 
 .area-pill:disabled {
@@ -112,8 +112,8 @@
 .panel-card {
   border-radius: 14px;
   border: 1px solid #c9d9cc;
-  background: #f8fbf8;
-  box-shadow: 0 8px 20px rgba(11, 125, 68, 0.07);
+  background: #ededed;
+  box-shadow: 0 8px 20px rgba(255, 92, 53, 0.12);
 }
 
 .dashboard-grid {
@@ -164,7 +164,7 @@
 
 .compliance-card strong {
   font-size: 28px;
-  color: #0b7d44;
+  color: #ff5c35;
 }
 
 .chart-card {
@@ -209,7 +209,7 @@
 }
 
 .section-block {
-  border-left: 6px solid #0b7d44;
+  border-left: 6px solid #ff5c35;
 }
 
 .manual-form {
@@ -269,8 +269,8 @@ select {
 
 input:focus,
 select:focus {
-  outline: 2px solid #0b7d4480;
-  border-color: #0b7d44;
+  outline: 2px solid #ff5c3580;
+  border-color: #ff5c35;
 }
 
 .primary-btn,
@@ -288,14 +288,14 @@ select:focus {
   border-radius: 999px;
   padding: 10px 16px;
   color: #ffffff;
-  background: linear-gradient(135deg, #0a8f4c 0%, #0b7d44 48%, #066233 100%);
-  box-shadow: 0 10px 20px rgba(11, 125, 68, 0.24);
+  background: linear-gradient(135deg, #ff6f4d 0%, #ff5c35 48%, #e54b25 100%);
+  box-shadow: 0 10px 20px rgba(255, 92, 53, 0.3);
   transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 .excel-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 12px 24px rgba(11, 125, 68, 0.3);
+  box-shadow: 0 12px 24px rgba(255, 92, 53, 0.36);
   filter: brightness(1.03);
 }
 
@@ -304,13 +304,13 @@ select:focus {
 }
 
 .primary-btn {
-  background: #0b7d44;
+  background: #ff5c35;
   color: #fff;
 }
 
 .ghost-btn {
-  background: #e8f4eb;
-  color: #0b7d44;
+  background: #ffe8e1;
+  color: #ff5c35;
 }
 
 .danger-btn {
@@ -331,7 +331,7 @@ button:disabled {
 }
 
 .csv-actions a {
-  color: #0b7d44;
+  color: #ff5c35;
   font-weight: 600;
 }
 
@@ -345,7 +345,7 @@ button:disabled {
 
 .csv-message {
   margin-top: 10px;
-  color: #0b7d44;
+  color: #ff5c35;
   font-weight: 600;
 }
 
@@ -355,7 +355,7 @@ button:disabled {
   left: 50%;
   transform: translateX(-50%);
   z-index: 1200;
-  background: #0b7d44;
+  background: #ff5c35;
   color: #fff;
   border-radius: 18px;
   padding: 12px 18px;
@@ -379,7 +379,7 @@ button:disabled {
   width: min(92vw, 420px);
   border-radius: 22px;
   border: 1px solid #c9d9cc;
-  background: #f8fbf8;
+  background: #ededed;
   box-shadow: 0 18px 38px rgba(5, 23, 14, 0.28);
   padding: 18px;
   text-align: center;
@@ -392,8 +392,8 @@ button:disabled {
   margin: 0 auto 10px;
   display: grid;
   place-items: center;
-  background: #e8f4eb;
-  color: #0b7d44;
+  background: #ffe8e1;
+  color: #ff5c35;
   font-weight: 800;
   font-size: 20px;
 }
@@ -421,7 +421,7 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid #d6e2d9;
+  border-bottom: 1px solid #ffd8cd;
   padding: 9px 10px;
   text-align: left;
   white-space: nowrap;
@@ -432,7 +432,7 @@ td > button {
 }
 
 th {
-  background: #e8f4eb;
+  background: #ffe8e1;
 }
 
 .status-badge {
@@ -446,9 +446,9 @@ th {
 }
 
 .status-success {
-  color: #0b7d44;
-  background: #e8f6ee;
-  border-color: #b8dec7;
+  color: #ff5c35;
+  background: #ffe8e1;
+  border-color: #ffcdbf;
 }
 
 .status-warn {
@@ -465,7 +465,7 @@ th {
 
 .status-neutral {
   color: #355147;
-  background: #eef3ef;
+  background: #ededed;
   border-color: #c9d6cc;
 }
 
@@ -473,7 +473,7 @@ th {
   margin-top: 14px;
   border: 1px solid #c9d9cc;
   border-radius: 12px;
-  background: #f3faf5;
+  background: #fff1eb;
   padding: 12px;
 }
 
@@ -576,21 +576,21 @@ th {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: radial-gradient(circle at top, #dcefdc, #f5f8f5 55%);
+  background: radial-gradient(circle at top, #ffe2d8, #fff5f1 55%);
 }
 
 .login-card {
   width: min(460px, 100%);
   border-radius: 16px;
-  border: 1px solid #c2d7c5;
+  border: 1px solid #ffcfc2;
   background: #fff;
   padding: 24px;
-  box-shadow: 0 16px 32px rgba(11, 125, 68, 0.1);
+  box-shadow: 0 16px 32px rgba(255, 92, 53, 0.16);
 }
 
 .login-card h1 {
   margin: 0 0 6px;
-  color: #0b7d44;
+  color: #ff5c35;
 }
 
 .login-card p {
@@ -673,3 +673,8 @@ th {
     grid-template-columns: 1fr;
   }
 }
+
+
+
+
+

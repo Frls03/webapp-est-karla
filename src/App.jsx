@@ -86,10 +86,10 @@ const PERIOD_META_LABELS = {
   semestral: 'semestral',
   anual: 'anual',
 }
-const COLORS = ['#0b7d44', '#f4b400', '#1e88e5', '#ef6c00', '#5e35b1', '#00897b']
+const COLORS = ['#ff5c35', '#ededed', '#f4b400', '#1e88e5', '#ef6c00', '#5e35b1']
 const CHART_COLORS = {
-  primary: '#0b7d44',
-  secondary: '#1e88e5',
+  primary: '#ff5c35',
+  secondary: '#ededed',
   accent: '#f4b400',
   danger: '#d93025',
 }
@@ -3866,5 +3866,7 @@ function getColumns(area, criterion) {
   ]
 }
 export default App
+
+
 
 
